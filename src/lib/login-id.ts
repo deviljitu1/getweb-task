@@ -3,3 +3,4 @@ export function resolveLoginEmail(identifier: string) {
   if (value.includes('@')) return value;
   return `${value}@admin.com`;
 }
+

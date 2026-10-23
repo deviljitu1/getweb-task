@@ -13,14 +13,22 @@ import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Clock, ArrowRight, Loader2, Eye, EyeOff } from 'lucide-react';
 import Seo from "@/components/Seo";
 import { resolveLoginEmail } from '@/lib/login-id';
 
 const Login = () => {
-  const [email, setEmail] = useState('');
+  const [email, setEmail] = useState(() => {
+    try {
+      return localStorage.getItem('saved_login_id') || '';
+    } catch {
+      return '';
+    }
+  });
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [rememberMe, setRememberMe] = useState(true);
   const [error, setError] = useState('');
   const [loginLoading, setLoginLoading] = useState(false);
   const { login, isAuthenticated, loading } = useAuth();
@@ -44,11 +52,36 @@ const Login = () => {
     setError('');
     setLoginLoading(true);
     try {
-      const loginEmail = resolveLoginEmail(email);
+      const trimmedId = email.trim();
+      const loginEmail = resolveLoginEmail(trimmedId);
       const result = await login(loginEmail, password);
       if (result.error) {
         setError(result.error);
       } else {
+        if (rememberMe) {
+          try {
+            localStorage.setItem('saved_login_id', trimmedId);
+          } catch { /* ignore */ }
+        } else {
+          try {
+            localStorage.removeItem('saved_login_id');
+          } catch { /* ignore */ }
+        }
+
+        // Trigger native mobile/browser prompt to save credentials (Google Password Manager / Keychain)
+        if (typeof window !== 'undefined' && 'credentials' in navigator && (window as any).PasswordCredential) {
+          try {
+            const cred = new (window as any).PasswordCredential({
+              id: trimmedId,
+              password: password,
+              name: trimmedId,
+            });
+            await navigator.credentials.store(cred);
+          } catch {
+            // Ignore if cancelled or unsupported in current environment
+          }
+        }
+
         navigate(nextPath);
       }
     } finally {
@@ -94,11 +127,15 @@ const Login = () => {
                 <Clock className="h-8 w-8 text-primary" />
               </div>
             </div>
-            <h2 className="text-3xl font-bold tracking-tight">Welcome back</h2>
-            <p className="text-muted-foreground">Sign in to your account to continue</p>
+            <h2 className="text-2xl sm:text-3xl font-bold tracking-tight leading-snug">
+              Welcome back<br />to GetWebApp
+            </h2>
+            <p className="text-xs sm:text-sm text-muted-foreground leading-relaxed">
+              Sign in to your account<br />to continue your work
+            </p>
           </div>
 
-          <form onSubmit={handleSubmit} className="space-y-6">
+          <form method="post" action="#" onSubmit={handleSubmit} autoComplete="on" className="space-y-6">
             {error && (
               <div className="p-4 rounded-lg bg-destructive/10 text-destructive text-sm font-medium border border-destructive/20 animate-in fade-in zoom-in-95">
                 {error}
@@ -110,11 +147,15 @@ const Login = () => {
                 <Label htmlFor="email">ID / Email</Label>
                 <Input
                   id="email"
+                  name="username"
                   type="text"
                   value={email}
                   onChange={e => setEmail(e.target.value)}
-                  placeholder="nahush or name@company.com"
+                  placeholder="Enter your ID or email"
                   autoComplete="username"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
                   required
                   className="h-12 bg-muted/30 border-input/60 focus:bg-background transition-all duration-300"
                 />
@@ -127,6 +168,7 @@ const Login = () => {
                 <div className="relative">
                   <Input
                     id="password"
+                    name="password"
                     autoComplete="current-password"
                     type={showPassword ? 'text' : 'password'}
                     value={password}
@@ -144,6 +186,20 @@ const Login = () => {
                     {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                   </button>
                 </div>
+              </div>
+
+              <div className="flex items-center space-x-2 pt-1">
+                <Checkbox
+                  id="rememberMe"
+                  checked={rememberMe}
+                  onCheckedChange={(checked) => setRememberMe(!!checked)}
+                />
+                <Label
+                  htmlFor="rememberMe"
+                  className="text-sm font-normal text-muted-foreground cursor-pointer select-none"
+                >
+                  Save password on this device
+                </Label>
               </div>
             </div>
 

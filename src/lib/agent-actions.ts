@@ -29,38 +29,67 @@ export async function executeAgentAction(name: string, args: Record<string, unkn
     return { tasks: data, limit: 150 };
   }
   if (name === 'create_task') {
-    const input = z.object({ title, description: text.default(''), category: z.string().refine(v => TASK_CATEGORIES.includes(v)).default('Other'), target_minutes: z.number().positive().max(100000).optional(), assigned_to: title.optional() }).strict().parse(args);
+    const rawTitle = typeof args.title === 'string' && args.title.trim()
+      ? args.title.trim()
+      : (typeof args.name === 'string' && args.name.trim() ? args.name.trim() : 'New Task');
+    
+    const catRaw = typeof args.category === 'string' ? args.category.trim() : 'Other';
+    const matchedCategory = TASK_CATEGORIES.find(c => c.toLowerCase() === catRaw.toLowerCase()) || 'Other';
+    
+    const descRaw = typeof args.description === 'string' ? args.description : '';
+    const targetMins = typeof args.target_minutes === 'number' && args.target_minutes > 0 ? args.target_minutes : undefined;
+    
     let userId = user.userId;
-    if (input.assigned_to) {
+    if (args.assigned_to && typeof args.assigned_to === 'string') {
       if (user.role !== 'admin') throw new Error('Only admins can assign tasks to other members.');
-      const matches = members.filter(m => m.is_active && (m.name.toLowerCase() === input.assigned_to!.toLowerCase() || m.user_id === input.assigned_to));
-      if (matches.length !== 1) throw new Error('Member name is missing or ambiguous. Ask for the exact active member name.');
-      userId = matches[0].user_id;
+      const search = args.assigned_to.trim().toLowerCase();
+      const match = members.find(m => m.is_active && (m.name.toLowerCase() === search || m.user_id === args.assigned_to));
+      if (!match) throw new Error('Member name is missing or ambiguous. Ask for the exact active member name.');
+      userId = match.user_id;
     }
-    const taskId = await context.addTask({ ...input, date: todayStr(), user_id: userId });
-    return { task_id: taskId, title: input.title };
+    
+    const taskId = await context.addTask({
+      title: rawTitle,
+      description: descRaw,
+      category: matchedCategory,
+      target_minutes: targetMins,
+      date: todayStr(),
+      user_id: userId,
+    });
+    return { task_id: taskId, title: rawTitle };
   }
   if (['update_task', 'delete_task', 'start_timer', 'pause_timer', 'finish_task'].includes(name)) {
-    const id = idSchema.parse(args.task_id);
-    // Re-read to support a newly created task in the same conversation and enforce permissions.
-    const { data: task, error } = await supabase.from('tasks').select('id,user_id').eq('id', id).single();
-    if (error || !task) throw new Error('Task was not found or is inaccessible.');
+    let id = typeof args.task_id === 'string' ? args.task_id.trim() : '';
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+      const search = id.toLowerCase();
+      const match = (search ? tasks.find(t => t.id === id || t.title.toLowerCase().includes(search)) : null)
+        || tasks.find(t => t.time_sessions?.some(s => s.end_time === null))
+        || tasks[0];
+      if (match) {
+        id = match.id;
+      } else {
+        throw new Error('Please specify which task you want to manage.');
+      }
+    }
+    const task = tasks.find(t => t.id === id) || (await supabase.from('tasks').select('id,user_id').eq('id', id).single()).data;
+    if (!task) throw new Error('Task was not found or is inaccessible.');
     if (user.role !== 'admin' && task.user_id !== user.userId) throw new Error('You can only manage your own tasks.');
     if (name === 'delete_task') await context.deleteTask(id);
     if (name === 'start_timer') {
-      if (task.user_id !== user.userId) throw new Error('Start timers only for your own work. Assign the task owner instead.');
+      if (task.user_id !== user.userId) throw new Error('Start timers only for your own work.');
       if (!tasks.find(t => t.id === id)?.time_sessions?.some(s => s.end_time === null)) await context.startTimer(id);
     }
     if (name === 'pause_timer') await context.pauseTimer(id);
     if (name === 'finish_task') {
-      if (!tasks.some(t => t.id === id)) throw new Error('The task was just created. Refresh before completing it.');
-      const input = z.object({ task_id: idSchema, completion_notes: text.optional(), project_link: z.string().url().optional() }).strict().parse(args);
-      await context.finishTask(id, input);
+      const notes = typeof args.completion_notes === 'string' ? args.completion_notes : undefined;
+      const link = typeof args.project_link === 'string' ? args.project_link : undefined;
+      await context.finishTask(id, { completion_notes: notes, project_link: link });
     }
     if (name === 'update_task') {
-      const input = z.object({ task_id: idSchema, target_minutes: z.number().positive().max(100000).optional(), status: z.enum(['Not Started', 'In Progress']).optional() }).strict().parse(args);
-      const { task_id: _id, ...updates } = input;
-      if (!Object.keys(updates).length) throw new Error('No changes were supplied.');
+      const updates: Record<string, unknown> = {};
+      if (typeof args.target_minutes === 'number') updates.target_minutes = args.target_minutes;
+      if (typeof args.status === 'string') updates.status = args.status;
+      if (typeof args.title === 'string' && args.title.trim()) updates.title = args.title.trim();
       await context.updateTask(id, updates);
     }
     return { task_id: id, action: name, saved: true };
