@@ -94,6 +94,93 @@ export async function executeAgentAction(name: string, args: Record<string, unkn
     }
     return { task_id: id, action: name, saved: true };
   }
+  if (name === 'send_message') {
+    const rawRecipient = typeof args.recipient === 'string' ? args.recipient.trim() : '';
+    const content = typeof args.message === 'string' ? args.message.trim() : (typeof args.content === 'string' ? args.content.trim() : '');
+    if (!content) throw new Error('Message content cannot be empty.');
+
+    if (/^(team|all|everyone|general)$/i.test(rawRecipient)) {
+      const { data: group } = await supabase.from('chat_groups').select('id, name').limit(1).maybeSingle();
+      const { error } = await supabase.from('messages').insert({
+        sender_id: user.userId,
+        group_id: group?.id || null,
+        receiver_id: null,
+        content: content,
+      });
+      if (error) throw error;
+      return { sent: true, recipient: 'Team', message: content };
+    }
+
+    const queries = rawRecipient
+      .split(/\s*(?:and|&|,)\s*/i)
+      .map(n => n.trim().toLowerCase())
+      .filter(Boolean);
+
+    const targetMembers: Array<{ user_id: string; name: string }> = [];
+
+    for (const q of queries) {
+      const found = members.filter(m => m.name.toLowerCase().includes(q));
+      if (found.length > 0) {
+        for (const f of found) {
+          if (!targetMembers.some(t => t.user_id === f.user_id)) {
+            targetMembers.push(f);
+          }
+        }
+      } else {
+        const { data: profileMatches } = await supabase
+          .from('profiles')
+          .select('user_id, name')
+          .ilike('name', `%${q}%`);
+        if (profileMatches) {
+          for (const f of profileMatches) {
+            if (!targetMembers.some(t => t.user_id === f.user_id)) {
+              targetMembers.push(f);
+            }
+          }
+        }
+      }
+    }
+
+    if (targetMembers.length === 0) {
+      throw new Error(`Could not find team member(s) matching "${rawRecipient}". Available members: ${members.map(m => m.name).join(', ')}`);
+    }
+
+    const sentNames: string[] = [];
+    for (const target of targetMembers) {
+      const { error } = await supabase.from('messages').insert({
+        sender_id: user.userId,
+        receiver_id: target.user_id,
+        group_id: null,
+        content: content,
+      });
+      if (!error) {
+        sentNames.push(target.name);
+      }
+    }
+
+    return { sent: true, sent_to: sentNames, message: content };
+  }
+  if (name === 'read_messages') {
+    const memberName = typeof args.member_name === 'string' ? args.member_name.trim().toLowerCase() : '';
+    let targetUserId: string | null = null;
+    if (memberName) {
+      const match = members.find(m => m.name.toLowerCase().includes(memberName));
+      if (match) targetUserId = match.user_id;
+    }
+
+    let query = supabase.from('messages').select('id, content, sender_id, receiver_id, created_at').order('created_at', { ascending: false }).limit(args.limit ? Number(args.limit) : 20);
+    if (targetUserId) {
+      query = query.or(`and(sender_id.eq.${user.userId},receiver_id.eq.${targetUserId}),and(sender_id.eq.${targetUserId},receiver_id.eq.${user.userId})`);
+    }
+    const { data: msgData, error } = await query;
+    if (error) throw error;
+    
+    const formatted = (msgData || []).map(m => {
+      const sender = members.find(mem => mem.user_id === m.sender_id)?.name || (m.sender_id === user.userId ? 'You' : 'Teammate');
+      return { from: sender, content: m.content, created_at: m.created_at };
+    });
+    return { messages: formatted.reverse() };
+  }
   if (user.role !== 'admin') throw new Error('CRM actions require an admin account.');
   if (name === 'read_crm') {
     const responses = await Promise.all([

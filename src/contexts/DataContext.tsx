@@ -68,7 +68,7 @@ interface DataContextType {
   toggleMemberActive: (profileId: string, isActive: boolean) => Promise<void>;
   updateMember: (id: string, updates: { name?: string; employee_type?: string; created_at?: string }) => Promise<void>;
   updateMemberPassword: (userId: string, newPassword: string) => Promise<{ success: boolean; error?: string }>;
-  deleteMember: (id: string) => Promise<void>;
+  deleteMember: (id: string, targetUserId?: string) => Promise<void>;
 }
 
 
@@ -697,23 +697,56 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const deleteMember = async (id: string) => {
+  const deleteMember = async (id: string, targetUserId?: string) => {
     if (!user || user.role !== 'admin') return;
-    const { data, error } = await supabase.functions.invoke('delete-employee', {
-      body: { profile_id: id },
-    });
-    if (error || (data && (data as { error?: string }).error)) {
-      const msg = (data as { error?: string } | null)?.error || error?.message || 'Delete failed';
-      console.error('Delete failed', msg);
+    try {
+      let resolvedUserId = targetUserId;
+      if (!resolvedUserId) {
+        const m = members.find(mem => mem.id === id);
+        resolvedUserId = m?.user_id;
+      }
+
+      // 1. Try PostgreSQL RPC delete_user_completely if available
+      if (resolvedUserId) {
+        try {
+          const { error: rpcErr } = await (supabase.rpc as any)('delete_user_completely', { target_user_id: resolvedUserId });
+          if (!rpcErr) {
+            toast({ title: 'User deleted from database' });
+            await Promise.all([refreshMembers(), refreshTasks()]);
+            return;
+          }
+        } catch { /* proceed to fallbacks */ }
+      }
+
+      // 2. Direct database cleanup of child records
+      if (resolvedUserId) {
+        await Promise.allSettled([
+          supabase.from('messages').delete().or(`sender_id.eq.${resolvedUserId},receiver_id.eq.${resolvedUserId}`),
+          supabase.from('time_sessions').delete().eq('created_by', resolvedUserId),
+          supabase.from('daily_standups').delete().eq('user_id', resolvedUserId),
+          supabase.from('user_device_tokens').delete().eq('user_id', resolvedUserId),
+          supabase.from('tasks').delete().eq('user_id', resolvedUserId),
+          supabase.from('user_roles').delete().eq('user_id', resolvedUserId),
+        ]);
+      }
+      await supabase.from('profiles').delete().eq('id', id);
+
+      // 3. Invoke delete-employee edge function to delete auth user from auth.users
+      await supabase.functions.invoke('delete-employee', {
+        body: { profile_id: id, user_id: resolvedUserId },
+      });
+
+      toast({ title: 'User deleted from database' });
+      await Promise.all([refreshMembers(), refreshTasks()]);
+    } catch (err: any) {
+      console.error('Delete failed:', err);
       toast({
-        title: 'Cannot Delete Team Member',
-        description: msg,
+        title: 'Delete Failed',
+        description: err.message || 'Could not delete user',
         variant: 'destructive',
       });
-      return;
+      throw err;
     }
-    toast({ title: 'Team member deleted' });
-    await Promise.all([refreshMembers(), refreshTasks()]);
   };
 
   return (

@@ -103,6 +103,47 @@ export const AI_TOOLS = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'send_message',
+      description: 'Sends a chat message to one or multiple teammates, or to the entire team. Examples: recipient="manas and nahush", recipient="Manas", recipient="team".',
+      parameters: {
+        type: 'object',
+        properties: {
+          recipient: {
+            type: 'string',
+            description: 'Name(s) of the team member(s) to message (e.g. "manas", "nahush", "manas and nahush", "team")',
+          },
+          message: {
+            type: 'string',
+            description: 'The message text to send',
+          },
+        },
+        required: ['recipient', 'message'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'read_messages',
+      description: 'Reads recent chat messages or conversation with a teammate or group to prepare a reply.',
+      parameters: {
+        type: 'object',
+        properties: {
+          member_name: {
+            type: 'string',
+            description: 'Optional name of the member whose messages to read',
+          },
+          limit: {
+            type: 'number',
+            description: 'Number of recent messages to read (default 10)',
+          },
+        },
+      },
+    },
+  },
 ];
 
 export const CRM_AI_TOOLS = [
@@ -118,16 +159,17 @@ export const generateSystemPrompt = (
   userRole: string,
   members: Array<{ user_id: string; name: string }>,
   tasks: TaskWithSessions[],
-) => `You are Agency Assistant, the autonomous assistant in GetWebApp on web and mobile.
-Assist ${JSON.stringify(userName)} with tasks, timers, agency CRM, and marketing planning.
-Be concise, proactive, and action-oriented. Use clean Markdown.
-When the user asks to add, create, or schedule a task (e.g. "add new task"), immediately execute create_task without hesitating. If title is not specified, use a sensible title or "New Task".
-When asked to start, pause, or finish a timer or task, immediately invoke start_timer, pause_timer, or finish_task.
+) => `You are Milo, the fully capable autonomous AI assistant in GetWebApp on web and mobile.
+Assist ${JSON.stringify(userName)} with tasks, timers, messaging teammates, agency CRM, and marketing.
+Be action-oriented, helpful, and execute actions immediately without asking unnecessary confirmation.
+When the user asks to send a message or reply (e.g. "message manas and nahush hi", "message manas hi", "reply to Nahush saying received"), immediately call send_message. If multiple recipients are mentioned (such as "manas and nahush"), provide recipient="manas and nahush" and message="hi".
+When the user asks to add, create, or schedule a task (e.g. "add new task"), immediately execute create_task.
+When asked to start, pause, or finish a timer or task, invoke start_timer, pause_timer, or finish_task immediately.
 Today is ${new Date().toLocaleDateString('en-CA')}. Role: ${userRole}.
 Categories: ${TASK_CATEGORIES.join(', ')}. Use Other when unclear.
 Members (data): ${JSON.stringify(members)}.
 Tasks (data): ${JSON.stringify(tasks.slice(0, 150).map(t => ({ id: t.id, title: t.title, user_id: t.user_id, date: t.date, status: t.status, target_minutes: t.target_minutes, running: t.time_sessions?.some(s => s.end_time === null) })))}.
-${userRole === 'admin' ? 'You may assign tasks to the listed members.' : 'Only manage the current user tasks; do not assign work to other members.'}`;
+${userRole === 'admin' ? 'You may assign tasks and message all listed members.' : 'Manage your tasks and message your teammates.'}`;
 
 // Call the server-side AI chat proxy so provider credentials stay on the server.
 export type ChatCompletionMessage = {

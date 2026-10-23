@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useAuth } from '@/contexts/AuthContext';
 import { useData } from '@/contexts/DataContext';
 import { MEMBER_TYPES, MemberType, ProfileWithRole } from '@/types';
 import { supabase } from '@/integrations/supabase/client';
@@ -17,6 +18,7 @@ import Seo from "@/components/Seo";
 import TeamDirectory from "@/components/TeamDirectory";
 
 const Members = ({ dialogOnly = false, onClose }: { dialogOnly?: boolean; onClose?: () => void }) => {
+  const { user } = useAuth();
   const { members, toggleMemberActive, refreshMembers, loading, deleteMember } = useData();
   const { startAudioCall, ringMember } = useCall();
   const [open, setInternalOpen] = useState(dialogOnly);
@@ -32,8 +34,8 @@ const Members = ({ dialogOnly = false, onClose }: { dialogOnly?: boolean; onClos
   const [deletingMember, setDeletingMember] = useState<ProfileWithRole | null>(null);
 
   const memberList = members
-    .filter(e => e.role === 'employee')
-    .filter(e => (e.name + ' ' + e.employee_type).toLowerCase().includes(searchQuery.toLowerCase()));
+    .filter(e => user?.role === 'admin' ? e.user_id !== user.userId : e.role === 'employee')
+    .filter(e => (e.name + ' ' + (e.employee_type || '') + ' ' + (e.role || '')).toLowerCase().includes(searchQuery.toLowerCase()));
 
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -79,11 +81,11 @@ const Members = ({ dialogOnly = false, onClose }: { dialogOnly?: boolean; onClos
   const handleDelete = async () => {
     if (!deletingMember) return;
     try {
-      await deleteMember(deletingMember.id);
-      toast({ title: 'Success', description: 'Team member deleted successfully' });
+      await deleteMember(deletingMember.id, deletingMember.user_id);
+      toast({ title: 'Success', description: `${deletingMember.name} deleted from database` });
       setDeletingMember(null);
     } catch (error) {
-      toast({ title: 'Error', description: 'Failed to delete team member', variant: 'destructive' });
+      toast({ title: 'Error', description: 'Failed to delete user from database', variant: 'destructive' });
     }
   };
 
@@ -186,16 +188,16 @@ const Members = ({ dialogOnly = false, onClose }: { dialogOnly?: boolean; onClos
       <AlertDialog open={!!deletingMember} onOpenChange={(open) => !open && setDeletingMember(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
+            <AlertDialogTitle>Delete user from database?</AlertDialogTitle>
             <AlertDialogDescription>
-              This action cannot be undone. This will permanently delete
-              <span className="font-semibold text-foreground"> {deletingMember?.name}</span> and remove all associated data.
+              This will permanently delete
+              <span className="font-semibold text-foreground"> {deletingMember?.name}</span> ({deletingMember?.role}) from the database along with all their tasks, timer logs, and auth records. This action cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction onClick={handleDelete} className="bg-destructive hover:bg-destructive/90">
-              Delete Team Member
+              Permanently Delete
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
