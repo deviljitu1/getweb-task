@@ -8,5 +8,6 @@ describe('workspace login identifiers', () => {
   });
   it('preserves the existing admin login alias', () => {
     expect(resolveLoginEmail('admin')).toBe('admin@admin.com');
+    expect(resolveLoginEmail('anshu')).toBe('anshu@admin.com');
   });
 });
