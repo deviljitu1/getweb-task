@@ -3,6 +3,16 @@ apply plugin: 'com.android.application'
 android {
     namespace = "com.dailyflow.app"
     compileSdk = rootProject.ext.compileSdkVersion
+
+    signingConfigs {
+        release {
+            storeFile file("getweb-release.keystore")
+            storePassword "getweb2026"
+            keyAlias "getweb"
+            keyPassword "getweb2026"
+        }
+    }
+
     defaultConfig {
         applicationId "com.dailyflow.app"
         minSdkVersion rootProject.ext.minSdkVersion
@@ -19,6 +29,7 @@ android {
     buildTypes {
         release {
             minifyEnabled false
+            signingConfig signingConfigs.release
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
     }
