@@ -24,6 +24,7 @@ const Tools = lazy(() => import('@/pages/Tools'));
 const Invoices = lazy(() => import('@/pages/Invoices'));
 const Finance = lazy(() => import('@/pages/Finance'));
 const DailyTools = lazy(() => import('@/pages/DailyTools'));
+const Members = lazy(() => import('@/pages/Members'));
 
 const App = () => (
   <QueryClientProvider client={queryClient}>
@@ -47,6 +48,7 @@ const App = () => (
                     <Route path="/chat" element={<Navigate to="/members" replace />} />
                     <Route path="/tools" element={<Tools />} />
                     <Route element={<ProtectedRoute adminOnly />}>
+                      <Route path="/directory" element={<Members />} />
                       <Route path="/crm" element={<AgencyCRM />} />
                       <Route path="/tools/invoices" element={<Invoices />} />
                       <Route path="/tools/finance" element={<Finance />} />

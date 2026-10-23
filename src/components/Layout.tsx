@@ -2,7 +2,7 @@ import { Outlet, NavLink as RouterNavLink, useNavigate, useLocation } from 'reac
 import { Suspense } from 'react';
 import { preloadRoute } from '@/lib/route-preload';
 import { useAuth } from '@/contexts/AuthContext';
-import { LayoutDashboard, Users, LogOut, Clock, ChevronRight, Activity, Handshake, Wrench, FileText, Wallet } from 'lucide-react';
+import { LayoutDashboard, Users, LogOut, Clock, ChevronRight, Activity, Handshake, Wrench, FileText, Wallet, UserCog } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -27,6 +27,7 @@ const Layout = () => {
     { to: '/members', icon: Users, label: 'Team' },
     { to: '/team-status', icon: Activity, label: 'Team Status' },
     ...(user?.role === 'admin' ? [
+      { to: '/directory', icon: UserCog, label: 'Manage Team' },
       { to: '/crm', icon: Handshake, label: 'Agency CRM' },
       { to: '/tools/invoices', icon: FileText, label: 'Invoices' },
       { to: '/tools/finance', icon: Wallet, label: 'Finance' },

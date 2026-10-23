@@ -411,7 +411,31 @@ const Chat = () => {
                 <div className="p-4 border-b border-border/50 bg-muted/20">
                     <h2 className="text-base font-semibold mb-3 flex items-center gap-2">
                         <MessageSquare className="h-4 w-4 text-primary" /> Team
-                        {user?.role === 'admin' && <DropdownMenu><DropdownMenuTrigger asChild><Button variant="ghost" size="icon" className="ml-auto h-8 w-8" aria-label="Team administration"><MoreVertical className="h-4 w-4" /></Button></DropdownMenuTrigger><DropdownMenuContent align="end"><DropdownMenuItem onClick={() => setAddingMember(true)}>Add team member</DropdownMenuItem><DropdownMenuItem onClick={() => setDirectoryOpen(true)}>Team directory & access</DropdownMenuItem></DropdownMenuContent></DropdownMenu>}
+                        {user?.role === 'admin' && (
+                            <div className="ml-auto flex items-center gap-1">
+                                <Button
+                                    variant="outline"
+                                    size="sm"
+                                    className="h-7 px-2 text-xs gap-1 border-primary/30 text-primary hover:bg-primary/10"
+                                    onClick={() => setDirectoryOpen(true)}
+                                    title="Manage Team & Access"
+                                >
+                                    <Users className="h-3.5 w-3.5" />
+                                    <span>Directory</span>
+                                </Button>
+                                <DropdownMenu>
+                                    <DropdownMenuTrigger asChild>
+                                        <Button variant="ghost" size="icon" className="h-7 w-7" aria-label="Team administration">
+                                            <MoreVertical className="h-4 w-4" />
+                                        </Button>
+                                    </DropdownMenuTrigger>
+                                    <DropdownMenuContent align="end">
+                                        <DropdownMenuItem onClick={() => setAddingMember(true)}>Add team member</DropdownMenuItem>
+                                        <DropdownMenuItem onClick={() => setDirectoryOpen(true)}>Team directory & access</DropdownMenuItem>
+                                    </DropdownMenuContent>
+                                </DropdownMenu>
+                            </div>
+                        )}
                         <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="Create chat group" onClick={() => setGroupEditor('new')}><Plus className="h-4 w-4" /></Button>
                     </h2>
                     <div className="relative">

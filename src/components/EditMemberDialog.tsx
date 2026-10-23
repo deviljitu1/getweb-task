@@ -1,13 +1,15 @@
 import { useState, useEffect } from 'react';
+import { useAuth } from '@/contexts/AuthContext';
 import { useData } from '@/contexts/DataContext';
 import { MEMBER_TYPES, MemberType, ProfileWithRole } from '@/types';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { formatJoinDate, getMemberTitle, getTenure } from '@/lib/utils';
-import { CalendarDays, Clock, ShieldCheck, Key } from 'lucide-react';
+import { CalendarDays, Clock, ShieldCheck, Key, Trash2 } from 'lucide-react';
 import { toast } from '@/hooks/use-toast';
 
 interface EditMemberDialogProps {
@@ -17,10 +19,13 @@ interface EditMemberDialogProps {
 }
 
 const EditMemberDialog = ({ member, open, onOpenChange }: EditMemberDialogProps) => {
-    const { updateMember, updateMemberPassword } = useData();
+    const { user } = useAuth();
+    const { updateMember, updateMemberPassword, deleteMember } = useData();
     const [name, setName] = useState(member.name);
     const [newPassword, setNewPassword] = useState('');
     const [empType, setEmpType] = useState<MemberType>(member.employee_type);
+    const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+    const [isDeleting, setIsDeleting] = useState(false);
     const [createdDate, setCreatedDate] = useState(() => {
         // Assuming created_at is date string or timestamp string
         if (member.created_at) {
@@ -72,9 +77,24 @@ const EditMemberDialog = ({ member, open, onOpenChange }: EditMemberDialogProps)
 
     const calculatedTitle = getMemberTitle(empType, createdDate); // Use local state for preview
     const tenure = getTenure(createdDate); // Use local state for preview
-    const joinDate = formatJoinDate(createdDate); // Use local state for preview
+    const handleDeleteMember = async () => {
+        setIsDeleting(true);
+        try {
+            await deleteMember(member.id, member.user_id);
+            toast({ title: 'Success', description: `${member.name} deleted from database` });
+            setShowDeleteConfirm(false);
+            onOpenChange(false);
+        } catch (err: any) {
+            toast({ title: 'Error', description: err.message || 'Failed to delete member', variant: 'destructive' });
+        } finally {
+            setIsDeleting(false);
+        }
+    };
+
+    const joinDate = formatJoinDate(createdDate);
 
     return (
+        <>
         <Dialog open={open} onOpenChange={onOpenChange}>
             <DialogContent className="sm:max-w-[425px] glass-card border-none">
                 <DialogHeader>
@@ -156,17 +176,49 @@ const EditMemberDialog = ({ member, open, onOpenChange }: EditMemberDialogProps)
                         />
                     </div>
 
-                    <DialogFooter className="mt-6">
-                        <Button type="button" variant="ghost" onClick={() => onOpenChange(false)} disabled={submitting}>
-                            Cancel
-                        </Button>
-                        <Button type="submit" disabled={submitting} className="shadow-lg shadow-primary/20">
-                            {submitting ? 'Saving...' : 'Save Changes'}
-                        </Button>
+                    <DialogFooter className="mt-6 flex flex-col sm:flex-row items-center justify-between gap-3">
+                        {user?.role === 'admin' && user.userId !== member.user_id && (
+                            <Button
+                                type="button"
+                                variant="destructive"
+                                size="sm"
+                                className="w-full sm:w-auto gap-1.5"
+                                onClick={() => setShowDeleteConfirm(true)}
+                                disabled={submitting || isDeleting}
+                            >
+                                <Trash2 className="h-4 w-4" /> Delete Member
+                            </Button>
+                        )}
+                        <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+                            <Button type="button" variant="ghost" onClick={() => onOpenChange(false)} disabled={submitting || isDeleting}>
+                                Cancel
+                            </Button>
+                            <Button type="submit" disabled={submitting || isDeleting} className="shadow-lg shadow-primary/20">
+                                {submitting ? 'Saving...' : 'Save Changes'}
+                            </Button>
+                        </div>
                     </DialogFooter>
                 </form>
             </DialogContent>
         </Dialog>
+
+        <AlertDialog open={showDeleteConfirm} onOpenChange={setShowDeleteConfirm}>
+            <AlertDialogContent>
+                <AlertDialogHeader>
+                    <AlertDialogTitle>Delete {member.name} from database?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                        This will permanently delete <span className="font-semibold text-foreground">{member.name}</span> from the database along with all tasks, time sessions, and login access. This action cannot be undone.
+                    </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                    <AlertDialogCancel disabled={isDeleting}>Cancel</AlertDialogCancel>
+                    <AlertDialogAction onClick={handleDeleteMember} disabled={isDeleting} className="bg-destructive hover:bg-destructive/90">
+                        {isDeleting ? 'Deleting...' : 'Permanently Delete'}
+                    </AlertDialogAction>
+                </AlertDialogFooter>
+            </AlertDialogContent>
+        </AlertDialog>
+        </>
     );
 };
 

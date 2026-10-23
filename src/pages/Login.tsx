@@ -102,8 +102,8 @@ const Login = () => {
         <div className="absolute bottom-[-10%] right-[-10%] w-[500px] h-[500px] bg-blue-500/20 rounded-full blur-[100px] opacity-70 animate-pulse delay-700" />
 
         <div className="relative z-10 flex flex-col justify-center px-20 text-foreground h-full">
-          <div className="mb-8 p-4 bg-white/10 w-fit rounded-2xl backdrop-blur-md border border-white/20 shadow-xl">
-            <Clock className="h-12 w-12 text-primary" />
+          <div className="mb-8 p-3 bg-white/10 w-fit rounded-2xl backdrop-blur-md border border-white/20 shadow-xl">
+            <img src="/images/getweb-loader.gif" alt="GetWebApp" className="h-16 w-16 object-contain rounded-xl" />
           </div>
           <h1 className="text-6xl font-bold mb-6 tracking-tight leading-tight">
             Seamlessly <br />
@@ -122,9 +122,9 @@ const Login = () => {
       <div className="flex-1 flex items-center justify-center p-8 bg-background relative">
         <div className="w-full max-w-[420px] space-y-8 animate-in fade-in slide-in-from-bottom-8 duration-700">
           <div className="flex flex-col space-y-2 text-center lg:text-left">
-            <div className="lg:hidden flex justify-center mb-4">
-              <div className="p-3 bg-primary/10 rounded-xl">
-                <Clock className="h-8 w-8 text-primary" />
+            <div className="flex justify-center lg:justify-start mb-2">
+              <div className="p-2 bg-primary/10 rounded-2xl border border-primary/20 shadow-sm">
+                <img src="/images/getweb-loader.gif" alt="GetWebApp" className="h-14 w-14 object-contain rounded-xl" />
               </div>
             </div>
             <h2 className="text-2xl sm:text-3xl font-bold tracking-tight leading-snug">

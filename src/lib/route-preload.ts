@@ -1,6 +1,7 @@
 const routes: Record<string, () => Promise<unknown>> = {
   '/': () => import('@/pages/Dashboard'),
   '/members': () => import('@/pages/TeamWorkspace'),
+  '/directory': () => import('@/pages/Members'),
   '/team-status': () => import('@/pages/TeamStatus'),
   '/crm': () => import('@/pages/AgencyCRM'),
   '/tools': () => import('@/pages/Tools'),

@@ -41,10 +41,40 @@ export default function TeamDirectory({ members, search, onSearch, onCall, onRin
     </CardHeader>
     <CardContent className="p-0">
       <div className="divide-y sm:hidden">{members.map(member => <div key={member.id} className="flex min-w-0 items-center gap-2.5 px-3 py-3">
-        {avatar(member)}<div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold">{member.name}</p><p className="mt-0.5 truncate text-xs text-muted-foreground">{member.employee_type}</p></div>{status(member)}{actions(member)}
+        {avatar(member)}
+        <div className="min-w-0 flex-1 cursor-pointer" onClick={() => onEdit(member)}>
+          <div className="flex items-center gap-1.5">
+            <p className="truncate text-sm font-semibold">{member.name}</p>
+            {member.role === 'admin' && <Badge variant="outline" className="text-[10px] py-0 px-1 border-primary/40 text-primary">Admin</Badge>}
+          </div>
+          <p className="mt-0.5 truncate text-xs text-muted-foreground">{member.employee_type}</p>
+        </div>
+        {status(member)}
+        <Button variant="ghost" size="icon" className="h-9 w-9 text-destructive hover:bg-destructive/10 shrink-0" onClick={() => onDelete(member)} aria-label={`Delete ${member.name}`}>
+          <Trash2 className="h-4 w-4" />
+        </Button>
+        {actions(member)}
       </div>)}</div>
       <div className="hidden sm:block"><Table><TableHeader className="bg-muted/40"><TableRow><TableHead className="h-9 pl-4 text-xs">Member</TableHead><TableHead className="h-9 text-xs">Department</TableHead><TableHead className="h-9 text-xs">Status</TableHead><TableHead className="h-9 pr-4 text-right text-xs">Actions</TableHead></TableRow></TableHeader><TableBody>{members.map(member => <TableRow key={member.id}>
-        <TableCell className="py-2.5 pl-4"><div className="flex items-center gap-2.5">{avatar(member)}<span className="text-sm font-medium">{member.name}</span></div></TableCell><TableCell className="py-2.5 text-xs text-muted-foreground">{member.employee_type}</TableCell><TableCell className="py-2.5">{status(member)}</TableCell><TableCell className="py-2 pr-4 text-right">{actions(member)}</TableCell>
+        <TableCell className="py-2.5 pl-4">
+          <div className="flex items-center gap-2.5">
+            {avatar(member)}
+            <div className="flex items-center gap-1.5">
+              <span className="text-sm font-medium">{member.name}</span>
+              {member.role === 'admin' && <Badge variant="outline" className="text-[10px] py-0 px-1 border-primary/40 text-primary">Admin</Badge>}
+            </div>
+          </div>
+        </TableCell>
+        <TableCell className="py-2.5 text-xs text-muted-foreground">{member.employee_type}</TableCell>
+        <TableCell className="py-2.5">{status(member)}</TableCell>
+        <TableCell className="py-2 pr-4 text-right">
+          <div className="flex items-center justify-end gap-1">
+            <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:bg-destructive/10" onClick={() => onDelete(member)} title="Delete member from database">
+              <Trash2 className="h-4 w-4" />
+            </Button>
+            {actions(member)}
+          </div>
+        </TableCell>
       </TableRow>)}</TableBody></Table></div>
       {!members.length && <div className="px-4 py-10 text-center text-sm text-muted-foreground">{search ? 'No matching team members.' : 'No team members yet. Add your first teammate above.'}</div>}
     </CardContent>
