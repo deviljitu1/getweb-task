@@ -58,10 +58,13 @@ const EditMemberDialog = ({ member, open, onOpenChange }: EditMemberDialogProps)
                     toast({ title: 'Success', description: 'Password updated successfully.' });
                 } else {
                     toast({ title: 'Error', description: passRes.error, variant: 'destructive' });
+                    return;
                 }
             }
 
             onOpenChange(false);
+        } catch {
+            toast({ title: 'Could not save profile', description: 'Please try again.', variant: 'destructive' });
         } finally {
             setSubmitting(false);
         }

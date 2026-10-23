@@ -1,22 +1,17 @@
 import { LucideIcon } from 'lucide-react';
 import { Card } from '@/components/ui/card';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 
 interface StatCardProps {
   icon: LucideIcon;
   label: string;
   value: string | number;
+  mobileValue?: string | number;
 }
 
-const StatCard = ({ icon: Icon, label, value }: StatCardProps) => (
-  <Card className="glass-card border-none p-6 flex items-center gap-5 transition-transform duration-300 hover:scale-[1.02]">
-    <div className="h-12 w-12 rounded-xl bg-gradient-to-br from-primary/20 to-primary/5 border border-primary/10 flex items-center justify-center shrink-0 shadow-sm">
-      <Icon className="h-6 w-6 text-primary" />
-    </div>
-    <div>
-      <p className="text-sm font-medium text-muted-foreground">{label}</p>
-      <p className="text-2xl font-bold tracking-tight text-foreground">{value}</p>
-    </div>
-  </Card>
-);
+const StatCard = ({ icon: Icon, label, value, mobileValue }: StatCardProps) => <>
+  <Popover><PopoverTrigger asChild><button aria-label={`${label}: ${value}`} className="flex min-w-0 flex-col items-center justify-center gap-2 rounded-xl border bg-card p-2.5 shadow-sm sm:hidden"><Icon className="h-5 w-5 text-primary" /><span className="text-base font-bold tabular-nums">{mobileValue ?? value}</span></button></PopoverTrigger><PopoverContent className="w-auto max-w-64 p-3 text-sm"><p className="font-medium">{label}</p><p className="text-muted-foreground">{value}</p></PopoverContent></Popover>
+  <Card className="hidden min-w-0 items-center gap-4 p-4 shadow-sm sm:flex"><div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10"><Icon className="h-5 w-5 text-primary" /></div><div className="min-w-0"><p className="text-xs font-medium text-muted-foreground">{label}</p><p className="mt-1 text-xl font-bold tracking-tight">{value}</p></div></Card>
+</>;
 
 export default StatCard;

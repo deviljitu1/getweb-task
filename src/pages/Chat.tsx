@@ -1,10 +1,18 @@
-import { useState, useEffect, useRef } from 'react';
+import { lazy, Suspense, useState, useEffect, useRef } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { useData } from '@/contexts/DataContext';
-import { Send, Users, MessageSquare, Plus, Search, Info, MoreVertical, Pencil, Trash2, X, Paperclip, Smile, Image as ImageIcon, FileText, ArrowLeft, ChevronDown } from 'lucide-react';
+import { useCall } from '@/components/CallModal';
+import { Send, Users, MessageSquare, Plus, Search, Info, MoreVertical, Pencil, Trash2, X, Paperclip, Smile, Image as ImageIcon, FileText, ArrowLeft, ChevronDown, Bell, Phone } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
-import EmojiPicker, { EmojiClickData } from 'emoji-picker-react';
+import type { EmojiClickData } from 'emoji-picker-react';
+const EmojiPicker = lazy(() => import('emoji-picker-react'));
+import { useIsMobile } from '@/hooks/use-mobile';
+import PresenceBadge from '@/components/PresenceBadge';
+import ChatGroupManager from '@/components/ChatGroupManager';
+import { useChatGroups } from '@/hooks/use-chat-groups';
+import TeamContacts from '@/components/TeamContacts';
+const Members = lazy(() => import('@/pages/Members'));
 import {
     DropdownMenu,
     DropdownMenuContent,
@@ -26,6 +34,8 @@ interface Message {
     id: string;
     sender_id: string;
     receiver_id: string | null;
+    group_id: string | null;
+    is_read?: boolean;
     content: string;
     created_at: string;
     profiles?: { name: string } | null;
@@ -39,8 +49,21 @@ interface Message {
 const Chat = () => {
     const { user } = useAuth();
     const { members } = useData(); // We need member list for 1:1 chat selection
+    const { startAudioCall, ringMember, startGroupCall } = useCall();
     const [messages, setMessages] = useState<Message[]>([]);
     const [newMessage, setNewMessage] = useState('');
+    const isMobile = useIsMobile();
+    const groupsQuery = useChatGroups();
+    const [selectedGroup, setSelectedGroup] = useState<string | null>(null);
+    const [addingMember, setAddingMember] = useState(false);
+    const [directoryOpen, setDirectoryOpen] = useState(false);
+    const [groupEditor, setGroupEditor] = useState<string | null>(null);
+    const [groupUnread, setGroupUnread] = useState<Record<string, number>>({});
+    const [historyLimit, setHistoryLimit] = useState(100);
+    const [sending, setSending] = useState(false);
+    const requestRef = useRef(0);
+    const latestRefresh = useRef<() => void>(() => undefined);
+    const liveConnected = useRef(false);
     const [selectedUser, setSelectedUser] = useState<string | null>(null); // null = Group Chat
     const scrollRef = useRef<HTMLDivElement>(null);
     const [searchQuery, setSearchQuery] = useState('');
@@ -53,6 +76,12 @@ const Chat = () => {
     const [isAtBottom, setIsAtBottom] = useState(true);
     const [attachmentUrls, setAttachmentUrls] = useState<Record<string, string>>({});
     const fileInputRef = useRef<HTMLInputElement>(null);
+
+    const conversationVisible = !isMobile || showMobileChat;
+    const currentGroup = groupsQuery.data?.groups.find(group => group.id === selectedGroup);
+    const currentGroupMembers = groupsQuery.data?.membership.filter(item => item.group_id === selectedGroup) || [];
+    const visibleMembers = selectedGroup ? members.filter(member => currentGroupMembers.some(item => item.user_id === member.user_id)) : members;
+    const canManageGroup = currentGroupMembers.some(item => item.user_id === user?.userId && item.role === 'admin');
 
     // Extract the storage-path portion of an attachment reference. Handles both
     // new-format paths (e.g. "userId/abc.png") and legacy full public URLs.
@@ -70,6 +99,7 @@ const Chat = () => {
 
     const fetchMessages = async () => {
         if (!user) return;
+        const request = ++requestRef.current;
 
         let query = supabase
             .from('messages')
@@ -77,14 +107,18 @@ const Chat = () => {
         *,
         profiles:sender_id (name)
       `)
-            .order('created_at', { ascending: true });
+            .order('created_at', { ascending: false }).limit(historyLimit);
 
-        if (selectedUser) {
+        if (selectedGroup) {
+            query = query.eq('group_id', selectedGroup);
+            if (conversationVisible) await supabase.rpc('mark_chat_group_read', { target_group: selectedGroup });
+        } else if (selectedUser) {
+            query = query.is('group_id', null);
             // 1:1 Chat: (me -> them) OR (them -> me)
             query = query.or(`and(sender_id.eq.${user.userId},receiver_id.eq.${selectedUser}),and(sender_id.eq.${selectedUser},receiver_id.eq.${user.userId})`);
 
             // Mark messages as read immediately when fetching for open chat
-            await supabase.from('messages')
+            if (conversationVisible) await supabase.from('messages')
                 .update({ is_read: true })
                 .eq('sender_id', selectedUser)
                 .eq('receiver_id', user.userId)
@@ -92,20 +126,21 @@ const Chat = () => {
 
         } else {
             // Group Chat: receiver_id is null
-            query = query.is('receiver_id', null);
+            query = query.is('receiver_id', null).is('group_id', null);
         }
 
         const { data, error } = await query;
+        if (request !== requestRef.current) return;
         if (error) {
             console.error('Error fetching messages:', error);
         } else {
-            setMessages(data as any || []);
+            setMessages((data as unknown as Message[] || []).slice().reverse());
 
             // For Group Chat, update last read time based on LATEST message
-            if (!selectedUser) {
-                const latestMsg = data && data.length > 0 ? data[data.length - 1] : null;
+            if (!selectedUser && !selectedGroup && conversationVisible) {
+                const latestMsg = data && data.length > 0 ? data[0] : null;
                 const lastReadTime = latestMsg ? latestMsg.created_at : new Date().toISOString();
-                localStorage.setItem('lastGroupReadTime', lastReadTime);
+                localStorage.setItem(`lastGroupReadTime:${user.userId}`, lastReadTime);
                 setGroupUnreadCount(0);
             }
         }
@@ -133,60 +168,47 @@ const Chat = () => {
         setUnreadCounts(counts);
 
         // Group Unread Counts (Simulated via LocalStorage)
-        const lastRead = localStorage.getItem('lastGroupReadTime') || '1970-01-01';
+        const lastRead = localStorage.getItem(`lastGroupReadTime:${user.userId}`) || '1970-01-01';
         // Note: Supabase .count() is cleaner but .select with head: true works too
         const { count } = await supabase
             .from('messages')
             .select('*', { count: 'exact', head: true })
             .is('receiver_id', null)
+            .is('group_id', null)
+            .neq('sender_id', user.userId)
             .gt('created_at', lastRead);
 
         setGroupUnreadCount(count || 0);
+        const custom = await supabase.rpc('chat_group_unread');
+        if (!custom.error) setGroupUnread(Object.fromEntries((custom.data || []).map(row => [row.group_id, Number(row.unread_count)])));
     };
 
-    // Realtime subscription & Polling fallback
     useEffect(() => {
-        // Initial fetch
-        fetchMessages();
-
-        // Realtime
-        const channel = supabase
-            .channel('chat_updates')
-            .on(
-                'postgres_changes',
-                {
-                    event: 'INSERT',
-                    schema: 'public',
-                    table: 'messages',
-                },
-                (payload) => {
-                    console.log('Realtime fetch triggered by:', payload);
-
-                    // Play notification sound if message is not from me (gated by user prefs)
-                    const newMsg = payload.new as any;
-                    if (user && newMsg.sender_id !== user.userId) {
-                        import('@/lib/notifications').then(({ playNotificationSound }) =>
-                            playNotificationSound('/universfield-new-notification-035-485894.mp3'),
-                        );
-                    }
-
-                    // If the new message is NOT for the current open chat, just refresh counts
-                    // Otherwise refresh messages
-                    fetchMessages();
-                }
-            )
-            .subscribe();
-
-        // Polling fallback (every 1 second) to ensure messages appear if WebSocket fails
-        const interval = setInterval(() => {
-            fetchMessages();
-        }, 1000);
-
-        return () => {
-            supabase.removeChannel(channel);
-            clearInterval(interval);
-        };
-    }, [selectedUser, user]);
+        latestRefresh.current = () => { void fetchMessages(); };
+    });
+    useEffect(() => {
+        void fetchMessages();
+    }, [selectedUser, selectedGroup, user?.userId, conversationVisible, historyLimit]);
+    useEffect(() => { setHistoryLimit(100); setMessages([]); setAttachmentUrls({}); }, [selectedUser, selectedGroup]);
+    useEffect(() => {
+        if (!user?.userId) return;
+        let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+        const connected = new Set<string>();
+        const refresh = () => { clearTimeout(refreshTimer); refreshTimer = setTimeout(() => latestRefresh.current(), 120); };
+        const channels = ['team-chat:group', 'team-chat:user:' + user.userId].map(topic => supabase.channel(topic, { config: { private: true } })
+            .on('broadcast', { event: 'message_changed' }, ({ payload }) => {
+                if (payload.event === 'INSERT' && payload.sender_id !== user.userId) void import('@/lib/notifications').then(({ playNotificationSound }) => playNotificationSound('/universfield-new-notification-035-485894.mp3'));
+                refresh();
+            }).subscribe(status => {
+                if (status === 'SUBSCRIBED') { connected.add(topic); refresh(); }
+                else connected.delete(topic);
+                liveConnected.current = connected.size === 2;
+            }));
+        const onVisible = () => { if (document.visibilityState === 'visible') refresh(); };
+        document.addEventListener('visibilitychange', onVisible);
+        const fallback = setInterval(() => { if (!liveConnected.current && document.visibilityState === 'visible') refresh(); }, 30000);
+        return () => { clearTimeout(refreshTimer); clearInterval(fallback); document.removeEventListener('visibilitychange', onVisible); liveConnected.current = false; channels.forEach(channel => { void supabase.removeChannel(channel); }); };
+    }, [user?.userId]);
 
     const lastMessageId = messages.length > 0 ? messages[messages.length - 1].id : null;
 
@@ -208,7 +230,7 @@ const Chat = () => {
         setTimeout(() => {
             scrollToBottom('auto');
         }, 50);
-    }, [selectedUser]);
+    }, [selectedUser, selectedGroup]);
 
     // Scroll to bottom when new messages arrive, IF we were already at bottom
     useEffect(() => {
@@ -254,7 +276,8 @@ const Chat = () => {
 
     const handleSendMessage = async (e: React.FormEvent) => {
         e.preventDefault();
-        if ((!newMessage.trim() && !selectedFile) || !user) return;
+        if ((!newMessage.trim() && !selectedFile) || !user || sending) return;
+        setSending(true);
 
         try {
             let attachmentUrl = null;
@@ -293,7 +316,8 @@ const Chat = () => {
                 // Send new message
                 const { error } = await supabase.from('messages').insert({
                     sender_id: user.userId,
-                    receiver_id: selectedUser, // null for Group
+                    receiver_id: selectedGroup ? null : selectedUser,
+                    group_id: selectedGroup,
                     content: newMessage.trim(),
                     attachment_url: attachmentUrl,
                     attachment_type: attachmentType,
@@ -322,7 +346,7 @@ const Chat = () => {
                 description: "Failed to send message/file. Check storage permissions.",
                 variant: "destructive"
             });
-        }
+        } finally { setSending(false); }
     };
 
     const handleEmojiClick = (emojiData: EmojiClickData) => {
@@ -332,6 +356,7 @@ const Chat = () => {
 
     const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
         if (e.target.files && e.target.files[0]) {
+            if (e.target.files[0].size > 10 * 1024 * 1024) { toast({ title: 'File too large', description: 'Choose a file up to 10 MB.', variant: 'destructive' }); return; }
             setSelectedFile(e.target.files[0]);
         }
     };
@@ -359,7 +384,7 @@ const Chat = () => {
         setEditingMessage(msg);
         setNewMessage(msg.content);
         // Focus input
-        setTimeout(() => document.querySelector('input')?.focus(), 0);
+        setTimeout(() => document.getElementById('team-message-input')?.focus(), 0);
     };
 
     const cancelEditing = () => {
@@ -372,17 +397,22 @@ const Chat = () => {
         .filter(emp => emp.name.toLowerCase().includes(searchQuery.toLowerCase()));
 
     return (
-        <div className="flex h-[calc(100vh-8rem)] gap-6 animate-in fade-in duration-500">
-            <Seo title="Team Communication — WorkTracker" description="Message teammates, share files, and keep project conversations in one place inside WorkTracker." path="/chat" noindex />
+        <div className="flex h-[calc(100dvh-10rem)] min-h-[300px] gap-0 overflow-hidden rounded-xl border bg-card md:h-[calc(100dvh-5rem)]">
+            <Seo title="Team Communication — GetWebApp" description="Message teammates, share files, and keep project conversations in one place inside GetWebApp." path="/members" noindex />
             <h1 className="sr-only">Team Communication</h1>
+            {addingMember && <Suspense fallback={null}><Members dialogOnly onClose={() => setAddingMember(false)} /></Suspense>}
+            <Dialog open={directoryOpen} onOpenChange={setDirectoryOpen}><DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-3xl"><DialogHeader><DialogTitle>Team directory & access</DialogTitle></DialogHeader>{directoryOpen && <Suspense fallback={<p>Loading directory…</p>}><Members /></Suspense>}</DialogContent></Dialog>
+            {groupEditor && <ChatGroupManager key={groupEditor} groupId={groupEditor} onClose={() => setGroupEditor(null)} onSelected={id => { setSelectedGroup(id); setSelectedUser(null); setShowMobileChat(true); }} />}
             {/* Sidebar: Chat List */}
             <div className={cn(
-                "w-full md:w-80 flex-col glass-card border-none rounded-2xl overflow-hidden shrink-0",
+                "w-full md:w-80 flex-col border-r bg-card overflow-hidden shrink-0",
                 showMobileChat ? "hidden md:flex" : "flex"
             )}>
                 <div className="p-4 border-b border-border/50 bg-muted/20">
-                    <h2 className="text-xl font-bold mb-4 flex items-center gap-2">
-                        <MessageSquare className="h-5 w-5 text-primary" /> Changes
+                    <h2 className="text-base font-semibold mb-3 flex items-center gap-2">
+                        <MessageSquare className="h-4 w-4 text-primary" /> Team
+                        {user?.role === 'admin' && <DropdownMenu><DropdownMenuTrigger asChild><Button variant="ghost" size="icon" className="ml-auto h-8 w-8" aria-label="Team administration"><MoreVertical className="h-4 w-4" /></Button></DropdownMenuTrigger><DropdownMenuContent align="end"><DropdownMenuItem onClick={() => setAddingMember(true)}>Add team member</DropdownMenuItem><DropdownMenuItem onClick={() => setDirectoryOpen(true)}>Team directory & access</DropdownMenuItem></DropdownMenuContent></DropdownMenu>}
+                        <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="Create chat group" onClick={() => setGroupEditor('new')}><Plus className="h-4 w-4" /></Button>
                     </h2>
                     <div className="relative">
                         <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
@@ -401,11 +431,12 @@ const Chat = () => {
                         <button
                             onClick={() => {
                                 setSelectedUser(null);
+                                setSelectedGroup(null);
                                 setShowMobileChat(true);
                             }}
                             className={cn(
                                 "w-full flex items-center gap-3 p-3 rounded-xl transition-all text-left",
-                                selectedUser === null
+                                selectedUser === null && !selectedGroup
                                     ? "bg-primary/10 text-primary shadow-sm ring-1 ring-primary/20"
                                     : "hover:bg-muted/50 text-muted-foreground hover:text-foreground"
                             )}
@@ -415,7 +446,7 @@ const Chat = () => {
                             </div>
                             <div className="flex-1 overflow-hidden">
                                 <p className="font-semibold truncate">Team Group Chat</p>
-                                <p className="text-xs opacity-70 truncate">Public channel for everyone</p>
+                                <p className="text-xs opacity-70 truncate">Workspace channel for the team</p>
                             </div>
                             {groupUnreadCount > 0 && (
                                 <Badge variant="destructive" className="ml-auto rounded-full h-5 min-w-[1.25rem] px-1 flex items-center justify-center text-[10px]">
@@ -424,53 +455,24 @@ const Chat = () => {
                             )}
                         </button>
 
+                        {groupsQuery.data?.groups.filter(group => group.name.toLowerCase().includes(searchQuery.toLowerCase())).map(group => <button key={group.id} onClick={() => { setSelectedGroup(group.id); setSelectedUser(null); setShowMobileChat(true); }} className={cn('flex w-full items-center gap-3 rounded-xl p-3 text-left', selectedGroup === group.id ? 'bg-primary/10 text-primary' : 'hover:bg-muted/50')}><span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary/10"><Users className="h-4 w-4" /></span><span className="min-w-0 flex-1"><span className="block truncate text-sm font-semibold">{group.name}</span><span className="text-xs text-muted-foreground">Private team group</span></span>{groupUnread[group.id] > 0 && <Badge className="rounded-full">{groupUnread[group.id]}</Badge>}</button>)}
+                        {groupsQuery.error && <p role="alert" className="px-2 text-xs text-destructive">Groups could not load. Refresh to retry.</p>}
                         <Separator className="my-2 bg-border/40" />
                         <p className="px-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Direct Messages</p>
 
                         {/* Team Member List */}
-                        {filteredMembers.map(emp => (
-                            <button
-                                key={emp.user_id}
-                                onClick={() => {
-                                    setSelectedUser(emp.user_id);
-                                    setShowMobileChat(true);
-                                }}
-                                className={cn(
-                                    "w-full flex items-center gap-3 p-3 rounded-xl transition-all text-left",
-                                    selectedUser === emp.user_id
-                                        ? "bg-primary/10 text-primary shadow-sm ring-1 ring-primary/20"
-                                        : "hover:bg-muted/50 text-muted-foreground hover:text-foreground"
-                                )}
-                            >
-                                <Avatar className="h-10 w-10 border border-background shadow-sm">
-                                    <AvatarImage src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${emp.name}`} />
-                                    <AvatarFallback>{emp.name.charAt(0)}</AvatarFallback>
-                                </Avatar>
-                                <div className="flex-1 overflow-hidden">
-                                    <p className="font-semibold truncate">{emp.name}</p>
-                                    <p className="text-xs opacity-70 truncate capitalize">{emp.employee_type}</p>
-                                </div>
-                                {emp.is_active && (
-                                    <div className="h-2 w-2 rounded-full bg-green-500 ring-2 ring-background absolute bottom-3 left-10" title="Active" />
-                                )}
-                                {unreadCounts[emp.user_id] > 0 && selectedUser !== emp.user_id && (
-                                    <Badge variant="destructive" className="ml-auto rounded-full h-5 min-w-[1.25rem] px-1 flex items-center justify-center text-[10px]">
-                                        {unreadCounts[emp.user_id]}
-                                    </Badge>
-                                )}
-                            </button>
-                        ))}
+                        <TeamContacts members={filteredMembers} selected={selectedUser} unread={unreadCounts} onSelect={id => { setSelectedUser(id); setSelectedGroup(null); setShowMobileChat(true); }} />
                     </div>
                 </ScrollArea>
             </div>
 
             {/* Main Chat Area */}
             <div className={cn(
-                "flex-1 flex-col glass-card border-none rounded-2xl overflow-hidden shadow-xl relative",
+                "min-w-0 flex-1 flex-col overflow-hidden relative",
                 showMobileChat ? "flex" : "hidden md:flex"
             )}>
                 {/* Chat Header */}
-                <div className="p-4 border-b border-border/50 bg-muted/20 flex items-center gap-4">
+                <div className="px-3 py-3 border-b border-border/50 bg-muted/20 flex items-center gap-2">
                     <Button
                         variant="ghost"
                         size="icon"
@@ -486,10 +488,35 @@ const Chat = () => {
                                 <AvatarImage src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${chatPartner?.name}`} />
                                 <AvatarFallback>{chatPartner?.name.charAt(0)}</AvatarFallback>
                             </Avatar>
-                            <div>
-                                <h3 className="font-bold text-lg leading-none">{chatPartner?.name}</h3>
-                                <p className="text-xs text-muted-foreground capitalize mt-1">{chatPartner?.employee_type}</p>
+                            <div className="flex-1 min-w-0">
+                                <h3 className="font-semibold text-sm leading-none truncate">{chatPartner?.name}</h3>
+                                <p className="text-xs text-muted-foreground capitalize mt-1 truncate">{chatPartner?.employee_type}</p>
+                                {chatPartner && <PresenceBadge userId={chatPartner.user_id} enabled={chatPartner.is_active} />}
                             </div>
+                            {chatPartner && (
+                                <div className="flex items-center gap-1.5 ml-auto">
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={() => ringMember(chatPartner.user_id, chatPartner.name)}
+                                        className="h-8 text-xs gap-1 border-amber-500/30 text-amber-700 dark:text-amber-400 hover:bg-amber-500/10 font-semibold px-2.5"
+                                        title="Ring / Bell Teammate"
+                                    >
+                                        <Bell className="h-3.5 w-3.5" />
+                                        <span className="hidden sm:inline">Ring</span>
+                                    </Button>
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={() => startAudioCall(chatPartner.user_id, chatPartner.name)}
+                                        className="h-8 text-xs gap-1 border-emerald-500/30 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-500/10 font-semibold px-2.5"
+                                        title="Start Internet Audio Call"
+                                    >
+                                        <Phone className="h-3.5 w-3.5" />
+                                        <span className="hidden sm:inline">Call</span>
+                                    </Button>
+                                </div>
+                            )}
                         </>
                     ) : (
                         <>
@@ -499,9 +526,11 @@ const Chat = () => {
                             <div className="flex-1">
                                 <h3 className="font-bold text-lg leading-none">Team Group Chat</h3>
                                 <p className="text-xs text-muted-foreground mt-1 cursor-pointer hover:underline" onClick={() => document.getElementById('view-members-trigger')?.click()}>
-                                    General discussion for all {members.length} members
+                                    {visibleMembers.length} members
                                 </p>
                             </div>
+                            <Button variant="outline" size="icon" className="h-8 w-8 shrink-0" aria-label="Join group voice call" title="Join group voice call" onClick={() => startGroupCall(selectedGroup, currentGroup?.name || 'Team group call')}><Phone className="h-3.5 w-3.5" /></Button>
+                            {canManageGroup && <Button variant="ghost" size="icon" aria-label="Manage chat group" onClick={() => setGroupEditor(selectedGroup)}><MoreVertical className="h-4 w-4" /></Button>}
                             <Dialog>
                                 <DialogTrigger asChild>
                                     <Button variant="ghost" size="icon" id="view-members-trigger" title="View Members" aria-label="View Members">
@@ -510,11 +539,11 @@ const Chat = () => {
                                 </DialogTrigger>
                                 <DialogContent className="sm:max-w-md">
                                     <DialogHeader>
-                                        <DialogTitle>Team Members ({members.length})</DialogTitle>
+                                        <DialogTitle>Group members ({visibleMembers.length})</DialogTitle>
                                     </DialogHeader>
                                     <ScrollArea className="h-72 pr-4">
                                         <div className="space-y-3">
-                                            {members.map(emp => (
+                                            {visibleMembers.map(emp => (
                                                 <div key={emp.user_id} className="flex items-center gap-3 p-2 hover:bg-muted/50 rounded-lg">
                                                     <Avatar className="h-8 w-8">
                                                         <AvatarImage src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${emp.name}`} />
@@ -524,7 +553,7 @@ const Chat = () => {
                                                         <p className="font-medium text-sm">{emp.name}</p>
                                                         <p className="text-xs text-muted-foreground capitalize">{emp.employee_type}</p>
                                                     </div>
-                                                    {emp.is_active && <div className="ml-auto h-2 w-2 bg-green-500 rounded-full" title="Active" />}
+                                                    <PresenceBadge userId={emp.user_id} enabled={emp.is_active} />
                                                 </div>
                                             ))}
                                         </div>
@@ -537,10 +566,11 @@ const Chat = () => {
 
                 {/* Messages Area */}
                 <ScrollArea 
-                    className="flex-1 p-4 md:p-6 bg-slate-50/50 dark:bg-slate-900/20"
+                    className="min-h-0 flex-1 p-3 md:p-5 bg-muted/30"
                     onScroll={handleScroll}
                 >
                     <div className="space-y-2 max-w-3xl mx-auto">
+                        {messages.length >= historyLimit && <Button variant="outline" size="sm" className="mx-auto block" onClick={() => setHistoryLimit(limit => limit + 100)}>Load earlier messages</Button>}
                         {messages.length === 0 ? (
                             <div className="flex flex-col items-center justify-center h-48 text-muted-foreground text-center animate-in fade-in zoom-in-95 duration-500">
                                 <MessageSquare className="h-12 w-12 mb-3 opacity-20" />
@@ -633,7 +663,7 @@ const Chat = () => {
 
                                                 {/* Dropdown for Edit/Delete (Only for me and not deleted) */}
                                                 {isMe && !msg.is_deleted && (
-                                                    <div className="absolute top-1 right-1 opacity-0 group-hover/msg:opacity-100 transition-opacity">
+                                                    <div className="absolute top-1 right-1 opacity-100 md:opacity-0 md:group-hover/msg:opacity-100 transition-opacity">
                                                         <DropdownMenu>
                                                             <DropdownMenuTrigger asChild>
                                                                 <Button variant="ghost" size="icon" className="h-6 w-6 rounded-full hover:bg-black/10 dark:hover:bg-white/10" aria-label="Message options">
@@ -654,10 +684,10 @@ const Chat = () => {
                                             </div>
 
                                             <p className={cn(
-                                                "text-[10px] text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity px-2",
+                                                "text-[10px] text-muted-foreground transition-opacity px-2",
                                                 isMe ? "text-right" : "text-left"
                                             )}>
-                                                {formatDistanceToNow(new Date(msg.created_at), { addSuffix: true })}
+                                                {formatDistanceToNow(new Date(msg.created_at), { addSuffix: true })}{isMe && selectedUser && <span className={msg.is_read ? 'ml-1 text-primary' : 'ml-1'}>{msg.is_read ? 'Read' : 'Sent'}</span>}
                                             </p>
                                         </div>
 
@@ -692,10 +722,10 @@ const Chat = () => {
                 )}
 
                 {/* Input Area */}
-                <div className="p-4 bg-background border-t border-border/50 relative z-50">
+                <div className="p-2.5 bg-background border-t border-border/50 relative z-10">
                     {showEmojiPicker && (
                         <div className="absolute bottom-20 left-4 z-50 shadow-xl rounded-xl border border-border">
-                            <EmojiPicker onEmojiClick={handleEmojiClick} theme={"auto" as never} />
+                            <Suspense fallback={<p className="p-4 text-xs">Loading emojis…</p>}><EmojiPicker onEmojiClick={handleEmojiClick} theme={"auto" as never} width={Math.min(320, window.innerWidth - 48)} /></Suspense>
                         </div>
                     )}
 
@@ -743,7 +773,8 @@ const Chat = () => {
                         <Input
                             value={newMessage}
                             onChange={e => setNewMessage(e.target.value)}
-                            placeholder={editingMessage ? "Edit message..." : `Message ${selectedUser ? chatPartner?.name : 'everyone'}...`}
+                            id="team-message-input"
+                                placeholder={editingMessage ? "Edit message..." : `Message ${selectedUser ? chatPartner?.name : 'everyone'}...`}
                             className="flex-1 bg-muted/30 border-muted-foreground/20 focus:bg-background transition-colors rounded-full px-4 py-6"
                             autoFocus
                         />
@@ -763,7 +794,7 @@ const Chat = () => {
                         <Button
                             type="submit"
                             size="icon"
-                            disabled={!newMessage.trim() && !selectedFile}
+                            disabled={sending || (!newMessage.trim() && !selectedFile)}
                             className={cn(
                                 "rounded-full h-10 w-10 shrink-0 shadow-md shadow-primary/20 disabled:opacity-50 transition-all hover:scale-105 active:scale-95",
                                 editingMessage ? "bg-amber-500 hover:bg-amber-600" : ""

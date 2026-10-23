@@ -50,7 +50,8 @@ Deno.serve(async (req) => {
       .eq('role', 'admin')
       .maybeSingle()
 
-    if (!roleData) {
+    const { data: profile } = await supabaseAdmin.from('profiles').select('is_active').eq('user_id', userId).maybeSingle()
+    if (!roleData || !profile?.is_active) {
       return new Response(JSON.stringify({ error: 'Forbidden: Admin access required' }), {
         status: 403,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -59,7 +60,7 @@ Deno.serve(async (req) => {
 
     const { name, email, password, employee_type, role = 'employee' } = await req.json()
 
-    if (!name || !email || !password) {
+    if (!name || !email || !password || !['admin', 'employee'].includes(role)) {
       return new Response(JSON.stringify({ error: 'Missing required fields' }), {
         status: 400,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -70,7 +71,8 @@ Deno.serve(async (req) => {
       email,
       password,
       email_confirm: true,
-      user_metadata: { name, role, employee_type: employee_type || 'Other' },
+      user_metadata: { name, employee_type: employee_type || 'Other' },
+      app_metadata: { role },
     })
 
     if (error) {

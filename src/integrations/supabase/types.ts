@@ -1,3 +1,6 @@
+import type { Invoice, InvoiceInsert, InvoicePayment, FinanceEntry, FinanceEntryInsert } from '@/types/finance';
+import type { AgencyLead, LeadActivity, LeadInsert, ActivityInsert, CrmTable } from '@/types/crm';
+
 export type Json =
   | string
   | number
@@ -14,6 +17,13 @@ export type Database = {
   }
   public: {
     Tables: {
+      chat_groups: CrmTable<{ id: string; name: string; created_by: string | null; created_at: string }, never>
+      chat_group_members: CrmTable<{ group_id: string; user_id: string; role: string; joined_at: string; last_read_at: string }, never>
+      agency_invoices: CrmTable<Invoice, InvoiceInsert>
+      invoice_payments: CrmTable<InvoicePayment, never>
+      finance_entries: CrmTable<FinanceEntry, FinanceEntryInsert>
+      agency_leads: CrmTable<AgencyLead, LeadInsert>
+      lead_activities: CrmTable<LeadActivity, ActivityInsert>
       clients: {
         Row: {
           company: string | null
@@ -56,8 +66,53 @@ export type Database = {
         }
         Relationships: []
       }
+      daily_standups: {
+        Row: {
+          blockers: string | null
+          completed_today: string
+          created_at: string
+          date: string
+          id: string
+          mood: string | null
+          tomorrow_plan: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          blockers?: string | null
+          completed_today?: string
+          created_at?: string
+          date: string
+          id?: string
+          mood?: string | null
+          tomorrow_plan?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          blockers?: string | null
+          completed_today?: string
+          created_at?: string
+          date?: string
+          id?: string
+          mood?: string | null
+          tomorrow_plan?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "daily_standups_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["user_id"]
+          },
+        ]
+      }
       messages: {
         Row: {
+          group_id: string | null
           attachment_name: string | null
           attachment_type: string | null
           attachment_url: string | null
@@ -71,6 +126,7 @@ export type Database = {
           sender_id: string
         }
         Insert: {
+          group_id?: string | null
           attachment_name?: string | null
           attachment_type?: string | null
           attachment_url?: string | null
@@ -84,6 +140,7 @@ export type Database = {
           sender_id: string
         }
         Update: {
+          group_id?: string | null
           attachment_name?: string | null
           attachment_type?: string | null
           attachment_url?: string | null
@@ -547,6 +604,33 @@ export type Database = {
           },
         ]
       }
+      user_device_tokens: {
+        Row: {
+          created_at: string
+          id: string
+          platform: string
+          token: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          platform: string
+          token: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          platform?: string
+          token?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       user_roles: {
         Row: {
           id: string
@@ -570,6 +654,14 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      create_chat_group: { Args: { group_name: string; member_ids: string[] }; Returns: string }
+      update_chat_group: { Args: { target_group: string; group_name: string; member_ids: string[] }; Returns: undefined }
+      mark_chat_group_read: { Args: { target_group: string }; Returns: undefined }
+      chat_group_unread: { Args: Record<string, never>; Returns: { group_id: string; unread_count: number }[] }
+      issue_agency_invoice: { Args: { invoice_id: string }; Returns: string }
+      record_invoice_payment: { Args: { invoice_id: string; payment_id: string; payment_amount: number; payment_date: string; payment_reference?: string; payment_notes?: string }; Returns: string }
+      void_invoice_payment: { Args: { payment_id: string; reason: string }; Returns: undefined }
+      convert_agency_lead: { Args: { lead_id: string }; Returns: string }
       get_client_report_by_token: { Args: { _token: string }; Returns: Json }
       get_team_activity: { Args: never; Returns: Json }
       has_role: {

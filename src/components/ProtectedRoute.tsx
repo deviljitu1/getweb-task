@@ -1,21 +1,16 @@
 import { Navigate, Outlet } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
+import WorkspaceLoader from '@/components/WorkspaceLoader';
 
-const ProtectedRoute = () => {
-  const { isAuthenticated, loading } = useAuth();
+const ProtectedRoute = ({ adminOnly = false }: { adminOnly?: boolean }) => {
+  const { user, isAuthenticated, loading } = useAuth();
 
   if (loading) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-background">
-        <div className="text-center">
-          <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent mx-auto mb-4" />
-          <p className="text-muted-foreground">Loading...</p>
-        </div>
-      </div>
-    );
+    return <WorkspaceLoader />;
   }
 
   if (!isAuthenticated) return <Navigate to="/login" replace />;
+  if (adminOnly && user?.role !== 'admin') return <Navigate to="/" replace />;
   return <Outlet />;
 };
 

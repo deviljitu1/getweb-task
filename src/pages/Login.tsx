@@ -15,6 +15,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Clock, ArrowRight, Loader2, Eye, EyeOff } from 'lucide-react';
 import Seo from "@/components/Seo";
+import { resolveLoginEmail } from '@/lib/login-id';
 
 const Login = () => {
   const [email, setEmail] = useState('');
@@ -43,7 +44,8 @@ const Login = () => {
     setError('');
     setLoginLoading(true);
     try {
-      const result = await login(email.trim(), password);
+      const loginEmail = resolveLoginEmail(email);
+      const result = await login(loginEmail, password);
       if (result.error) {
         setError(result.error);
       } else {
@@ -57,7 +59,7 @@ const Login = () => {
 
   return (
     <div className="min-h-screen flex w-full">
-      <Seo title="Sign in — WorkTracker" description="Sign in to WorkTracker to log daily tasks, run time timers, and review your team's work." path="/login" />
+      <Seo title="Sign in — GetWebApp" description="Sign in to GetWebApp to log daily tasks, run time timers, and review your team's work." path="/login" />
       {/* Left branding panel with animated gradient */}
       <div className="hidden lg:flex lg:w-[55%] relative overflow-hidden bg-primary/5">
         <div className="absolute inset-0 bg-gradient-to-br from-primary/20 via-background to-primary/5 animate-gradient-xy" />
@@ -75,7 +77,7 @@ const Login = () => {
             <span className="text-primary">Track Time.</span>
           </h1>
           <p className="text-xl text-muted-foreground max-w-lg leading-relaxed">
-            Elevate your productivity with WorkTracker. effortless time management for modern teams.
+            Elevate your productivity with GetWebApp. Effortless time management for modern teams.
           </p>
         </div>
 
@@ -105,13 +107,14 @@ const Login = () => {
 
             <div className="space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="email">Email</Label>
+                <Label htmlFor="email">ID / Email</Label>
                 <Input
                   id="email"
-                  type="email"
+                  type="text"
                   value={email}
                   onChange={e => setEmail(e.target.value)}
-                  placeholder="name@company.com"
+                  placeholder="nahush or name@company.com"
+                  autoComplete="username"
                   required
                   className="h-12 bg-muted/30 border-input/60 focus:bg-background transition-all duration-300"
                 />
@@ -124,6 +127,7 @@ const Login = () => {
                 <div className="relative">
                   <Input
                     id="password"
+                    autoComplete="current-password"
                     type={showPassword ? 'text' : 'password'}
                     value={password}
                     onChange={e => setPassword(e.target.value)}

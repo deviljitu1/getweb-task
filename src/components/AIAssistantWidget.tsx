@@ -1,291 +1,467 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useData } from '@/contexts/DataContext';
-import { chatCompletion, AI_TOOLS, generateSystemPrompt } from '@/lib/ai-agent';
-import type { AIPersona } from '@/lib/ai-agent';
+import { chatCompletion, AI_TOOLS, CRM_AI_TOOLS, generateSystemPrompt } from '@/lib/ai-agent';
+import type { ChatCompletionMessage } from '@/lib/ai-agent';
+import { runAgent } from '@/lib/agent-runner';
+import { executeAgentAction } from '@/lib/agent-actions';
+import { useQueryClient } from '@tanstack/react-query';
 import { speakText, stopSpeaking } from '@/lib/voice';
-import { Bot, X, Maximize2, Minimize2, Send, Loader2, Mic, MicOff, VolumeX } from 'lucide-react';
+import { getNotificationPrefs, setNotificationPrefs } from '@/lib/notifications';
+import {
+  Sparkles,
+  X,
+  Maximize2,
+  Minimize2,
+  Send,
+  Loader2,
+  Mic,
+  MicOff,
+  Volume2,
+  VolumeX,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { cn, todayStr } from '@/lib/utils';
+import { cn } from '@/lib/utils';
 import ReactMarkdown from 'react-markdown';
 import { toast } from '@/hooks/use-toast';
+import LocalAISettings from '@/components/LocalAISettings';
 
-export const AIAssistantWidget = () => {
-  const [isOpen, setIsOpen] = useState(false);
+interface Message {
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  toolCallInfo?: string;
+}
+
+const ASSISTANT_CONFIG = {
+  name: 'Milo',
+  greeting: (name: string) => `Hi ${name}. How can I help?`,
+  placeholder: 'Message Milo…',
+};
+const cleanAssistantText = (value: string) => value.replace(/[\p{Extended_Pictographic}\uFE0F\u200D]/gu, '').replace(/\bemployees\b/gi, 'team members').replace(/\bemployee\b/gi, 'team member').trim();
+
+export const AIAssistantWidget: React.FC<{ initialOpen?: boolean }> = ({ initialOpen = false }) => {
+  const { user } = useAuth();
+  const queryClient = useQueryClient();
+  const {
+    tasks,
+    members,
+    addTask,
+    deleteTask,
+    updateTask,
+    startTimer,
+    pauseTimer,
+    finishTask,
+    refreshTasks,
+    refreshClients,
+    refreshProjects,
+  } = useData();
+
+  const [isOpen, setIsOpen] = useState(initialOpen);
   const [isExpanded, setIsExpanded] = useState(false);
-  const [messages, setMessages] = useState<Array<Record<string, unknown>>>([]);
+
+  const initialGreeting = useMemo(() => {
+    const config = ASSISTANT_CONFIG;
+    const firstName = user?.name ? user.name.split(' ')[0] : 'there';
+    return config.greeting(firstName);
+  }, [user?.name]);
+
+  const [messages, setMessages] = useState<Message[]>([
+    {
+      role: 'assistant',
+      content: initialGreeting,
+    },
+  ]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isListening, setIsListening] = useState(false);
-  const [persona, setPersona] = useState<AIPersona>('Jarvis');
-  
-  // Speech Recognition Setup
-  const SpeechRecognition: any = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-  const recognition = useRef<any>(null);
+  const [voiceAudioEnabled, setVoiceAudioEnabled] = useState<boolean>(() => getNotificationPrefs().voiceEnabled);
 
-  useEffect(() => {
-    if (SpeechRecognition) {
-      recognition.current = new SpeechRecognition();
-      recognition.current.continuous = false;
-      recognition.current.interimResults = false;
-      recognition.current.lang = 'en-US';
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const recognitionRef = useRef<any>(null);
+  const sendVoiceRef = useRef<(text: string) => void>(() => undefined);
 
-      recognition.current.onresult = (event: any) => {
-        const transcript = event.results[0][0].transcript;
-        // Auto-send the voice transcript immediately!
-        handleSend(undefined, transcript);
-      };
+  const currentConfig = ASSISTANT_CONFIG;
 
-      recognition.current.onend = () => {
-        setIsListening(false);
-      };
-
-      recognition.current.onerror = (event: any) => {
-        console.error("Speech recognition error", event.error);
-        setIsListening(false);
-        if (event.error === 'not-allowed') {
-          toast({ title: "Microphone Access Denied", description: "Please allow microphone access in your browser.", variant: "destructive" });
-        }
-      };
-    }
-  }, [SpeechRecognition]);
-
-  const toggleListening = () => {
-    if (isListening) {
-      recognition.current?.stop();
-      setIsListening(false);
-    } else {
-      // Stop any ongoing TTS when user starts speaking
+  // Sync voice preference changes
+  const toggleVoiceAudio = () => {
+    const nextVal = !voiceAudioEnabled;
+    setVoiceAudioEnabled(nextVal);
+    setNotificationPrefs({ voiceEnabled: nextVal });
+    if (!nextVal) {
       stopSpeaking();
-      recognition.current?.start();
-      setIsListening(true);
+    } else {
+      toast({ title: 'Voice Audio Enabled', description: 'The assistant will speak responses out loud.' });
     }
   };
-  
-  const { user } = useAuth();
-  const { tasks, members, addTask, deleteTask, updateTask } = useData();
-  const scrollRef = useRef<HTMLDivElement>(null);
 
+  // Scroll to bottom on updates
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [messages]);
+  }, [messages, isLoading]);
 
-  const handleSend = async (e?: React.FormEvent, overrideText?: string) => {
-    e?.preventDefault();
-    
-    const userMessage = overrideText || input.trim();
-    if (!userMessage || isLoading || !user) return;
+  // Focus input on open
+  useEffect(() => {
+    if (isOpen) {
+      setTimeout(() => inputRef.current?.focus(), 150);
+    } else {
+      stopSpeaking();
+      if (isListening && recognitionRef.current) {
+        recognitionRef.current.stop();
+        setIsListening(false);
+      }
+    }
+  }, [isOpen]);
 
-    if (!overrideText) setInput('');
-    
-    const newMessages = [...messages, { role: 'user', content: userMessage }];
-    setMessages(newMessages);
-    setIsLoading(true);
+  // Set up Speech Recognition (Web Speech API)
+  const isSpeechSupported = typeof window !== 'undefined' && Boolean((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const SpeechClass = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechClass) return;
 
     try {
-      const systemPrompt = generateSystemPrompt(user.name, user.role, members, tasks, persona);
+      const rec = new SpeechClass();
+      rec.continuous = false;
+      rec.interimResults = false;
+      rec.lang = 'en-US';
 
-      const conversation: any[] = [
-        { role: 'system', content: systemPrompt },
-        ...newMessages,
-      ];
+      rec.onresult = (event: any) => {
+        const transcript = event.results?.[0]?.[0]?.transcript;
+        if (transcript) {
+          sendVoiceRef.current(transcript);
+        }
+      };
 
-      const runner = await chatCompletion({
-        messages: conversation as any,
-        tools: AI_TOOLS,
-        tool_choice: 'auto',
-      });
+      rec.onend = () => {
+        setIsListening(false);
+      };
 
-      const responseMessage = runner.choices[0].message;
-
-      // Handle tool calls
-      if (responseMessage.tool_calls && responseMessage.tool_calls.length > 0) {
-        setMessages(prev => [...prev, { role: 'assistant', content: 'Working on it...' }]);
-
-        for (const toolCall of responseMessage.tool_calls) {
-          const args = JSON.parse(toolCall.function.arguments);
-          let resultStr = "Success";
-
-          try {
-            if (toolCall.function.name === 'create_task') {
-              let targetUserId = user.userId;
-              if (args.assigned_to && user.role === 'admin') {
-                const member = members.find(e => e.name.toLowerCase() === args.assigned_to.toLowerCase() || e.name.toLowerCase().includes(args.assigned_to.toLowerCase()));
-                if (member) {
-                  targetUserId = member.user_id;
-                }
-              }
-
-              await addTask({
-                title: args.title,
-                description: args.description || '',
-                category: args.category || 'Other',
-                date: todayStr(),
-                target_minutes: args.target_minutes,
-                user_id: targetUserId
-              });
-              resultStr = "Task created successfully.";
-            }
-            else if (toolCall.function.name === 'delete_task') {
-              await deleteTask(args.task_id);
-              resultStr = "Task deleted successfully.";
-            }
-            else if (toolCall.function.name === 'update_task') {
-              await updateTask(args.task_id, {
-                target_minutes: args.target_minutes,
-                status: args.status
-              });
-              resultStr = "Task updated successfully.";
-            }
-          } catch (e: any) {
-            resultStr = "Error: " + e.message;
-          }
-
-          // Push the tool result back into the message history
-          conversation.push(responseMessage as any);
-          conversation.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            name: toolCall.function.name,
-            content: resultStr,
+      rec.onerror = (event: any) => {
+        console.warn('Speech recognition error:', event.error);
+        setIsListening(false);
+        if (event.error === 'not-allowed') {
+          toast({
+            title: 'Microphone Access Denied',
+            description: 'Please grant microphone permissions in browser settings.',
+            variant: 'destructive',
           });
         }
+      };
 
-        // Second call with tool results
-        const secondResponse = await chatCompletion({
-          messages: conversation as any,
-        });
-        
-        // Replace the "Working on it..." with the actual response
-        const finalResponse = secondResponse.choices[0].message.content || 'Done.';
-        setMessages(prev => {
-          const m = [...prev];
-          m[m.length - 1] = { role: 'assistant', content: finalResponse };
-          return m;
-        });
-        speakText(finalResponse);
+      recognitionRef.current = rec;
+    } catch (e) {
+      console.warn('Failed to initialize speech recognition:', e);
+    }
 
-      } else {
-        const finalResponse = responseMessage.content || '';
-        setMessages(prev => [...prev, { role: 'assistant', content: finalResponse }]);
-        speakText(finalResponse);
+    return () => {
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.abort();
+        } catch {}
       }
+    };
+  }, []);
 
-    } catch (error: any) {
-      console.error(error);
-      toast({ title: 'AI Error', description: error.message, variant: 'destructive' });
-      setMessages(prev => [...prev, { role: 'assistant', content: "Sorry, I ran into an error reaching the AI service. Please try again in a moment." }]);
-    } finally {
-      setIsLoading(false);
+  const toggleListening = () => {
+    if (!recognitionRef.current) {
+      toast({
+        title: 'Voice Input Unavailable',
+        description: 'Speech recognition is not supported in this browser.',
+      });
+      return;
+    }
+
+    if (isListening) {
+      recognitionRef.current.stop();
+      setIsListening(false);
+    } else {
+      stopSpeaking();
+      try {
+        recognitionRef.current.start();
+        setIsListening(true);
+      } catch (err) {
+        console.warn('Failed to start speech recognition:', err);
+      }
     }
   };
 
-  if (!isOpen) {
-    return (
-      <Button 
-        onClick={() => setIsOpen(true)}
-        className="fixed bottom-6 right-6 h-14 w-14 rounded-full shadow-2xl shadow-primary/40 hover:scale-105 transition-all z-50 bg-primary"
-      >
-        <Bot className="h-6 w-6 text-primary-foreground" />
-      </Button>
-    );
-  }
+  const handleSend = useCallback(async (e?: React.FormEvent, overrideText?: string) => {
+    e?.preventDefault();
+    const userText = (overrideText || input).trim();
+    if (!userText || isLoading || !user) return;
+
+    if (!overrideText) setInput('');
+
+    const updatedMessages: Message[] = [...messages, { role: 'user', content: userText }];
+    setMessages(updatedMessages);
+    setIsLoading(true);
+
+    try {
+      const systemPrompt = generateSystemPrompt(
+        user.name,
+        user.role,
+        members.map((m) => ({ user_id: m.user_id, name: m.name })),
+        tasks
+      );
+
+      const conversation: ChatCompletionMessage[] = [
+        { role: 'system', content: systemPrompt },
+        ...updatedMessages.map((m) => ({
+          role: m.role,
+          content: m.content,
+        })),
+      ];
+
+      const result = await runAgent(
+        conversation,
+        user.role === 'admin' ? [...AI_TOOLS, ...CRM_AI_TOOLS] : AI_TOOLS,
+        chatCompletion,
+        (name, args) => executeAgentAction(name, args, {
+          user, tasks, members, addTask, updateTask, deleteTask, startTimer, pauseTimer, finishTask,
+        }),
+      );
+      if (result.results.length) {
+        await refreshTasks();
+        await Promise.all([refreshClients(), refreshProjects()]);
+        await queryClient.invalidateQueries({ queryKey: ['agency-leads'] });
+        await queryClient.invalidateQueries({ queryKey: ['lead-activities'] });
+      }
+      const text = cleanAssistantText(result.text);
+      setMessages(prev => [...prev, { role: 'assistant', content: text }]);
+      if (voiceAudioEnabled) speakText(text);
+    } catch (err: any) {
+      console.error('AI assistant error:', err);
+      const errMsg = err.message || 'Network issue reaching AI service';
+      toast({
+        title: `${currentConfig.name} request failed`,
+        description: errMsg,
+        variant: 'destructive',
+      });
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: 'assistant',
+          content: `The request could not be completed: ${errMsg}. Please try again!`,
+        },
+      ]);
+    } finally {
+      setIsLoading(false);
+      setTimeout(() => inputRef.current?.focus(), 80);
+    }
+  }, [
+    input,
+    isLoading,
+    user,
+    messages,
+    members,
+    tasks,
+    addTask,
+    startTimer,
+    pauseTimer,
+    finishTask,
+    deleteTask,
+    updateTask,
+    refreshTasks,
+    refreshClients,
+    refreshProjects,
+    voiceAudioEnabled,
+    currentConfig.name,
+    queryClient,
+  ]);
+
+  useEffect(() => {
+    sendVoiceRef.current = text => { void handleSend(undefined, text); };
+  }, [handleSend]);
+
+
+  if (!user) return null;
 
   return (
-    <div className={cn(
-      "fixed bottom-6 right-6 bg-background border border-border/50 shadow-2xl rounded-2xl flex flex-col z-50 overflow-hidden transition-all duration-300",
-      isExpanded ? "w-[400px] h-[600px] sm:w-[500px] sm:h-[700px]" : "w-[350px] h-[500px]"
-    )}>
-      <div className="p-4 bg-primary/5 border-b border-border/50 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <div className="p-1.5 bg-primary/10 rounded-lg relative overflow-hidden">
-            <Bot className="h-5 w-5 text-primary relative z-10" />
-            {isListening && (
-               <div className="absolute inset-0 bg-primary/20 animate-pulse z-0" />
-            )}
-          </div>
-          <select 
-            value={persona} 
-            onChange={(e) => setPersona(e.target.value as AIPersona)}
-            className="bg-transparent border-none text-sm font-semibold outline-none cursor-pointer focus:ring-0"
-          >
-            <option value="Jarvis">J.A.R.V.I.S</option>
-            <option value="Professional">Professional</option>
-            <option value="Funny">Funny</option>
-            <option value="Flirty">Flirty</option>
-          </select>
-        </div>
-        <div className="flex gap-1">
-          <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-foreground" onClick={stopSpeaking} title="Stop Audio">
-            <VolumeX className="h-4 w-4" />
-          </Button>
-          <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-foreground" onClick={() => setIsExpanded(!isExpanded)}>
-            {isExpanded ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
-          </Button>
-          <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-destructive" onClick={() => setIsOpen(false)}>
-            <X className="h-4 w-4" />
-          </Button>
-        </div>
-      </div>
-      
-      <ScrollArea className="flex-1 p-4 bg-slate-50/50 dark:bg-slate-900/20">
-        {messages.length === 0 && (
-          <div className="text-center text-muted-foreground mt-10 space-y-4">
-            <Bot className="h-10 w-10 mx-auto opacity-20" />
-            <p className="text-sm">Hi! I can help you create tasks, set reminders, and manage your workload. Just ask!</p>
-          </div>
-        )}
-        <div className="space-y-4">
-          {messages.map((m, i) => (
-            <div key={i} className={cn("flex gap-2 max-w-[85%]", m.role === 'user' ? "ml-auto flex-row-reverse" : "")}>
-              <div className={cn(
-                "p-3 rounded-2xl text-sm", 
-                m.role === 'user' ? "bg-primary text-primary-foreground rounded-tr-sm" : "bg-white dark:bg-muted border border-border/50 rounded-tl-sm prose prose-sm dark:prose-invert"
-              )}>
-                {m.role === 'user' ? String(m.content ?? '') : <ReactMarkdown>{String(m.content ?? '')}</ReactMarkdown>}
+    <>
+      {/* Single Unified Floating Launcher */}
+      {!isOpen && (
+        <button
+          onClick={() => setIsOpen(true)}
+          className="fixed bottom-[calc(5rem+env(safe-area-inset-bottom))] right-4 sm:bottom-6 sm:right-6 z-50 h-12 w-12 rounded-full bg-white text-primary shadow-2xl shadow-primary/40 hover:scale-105 active:scale-95 transition-all flex items-center justify-center group ring-2 ring-primary/20"
+          aria-label="Open AI Assistant"
+          title="Open Milo"
+        >
+          <img src="/images/assistant-cat.png" alt="" className="h-full w-full rounded-full object-contain" width="48" height="48" />
+        </button>
+      )}
+
+      {/* Unified AI Chatbot Window */}
+      {isOpen && (
+        <div
+          className={cn(
+            'fixed bottom-[calc(5rem+env(safe-area-inset-bottom))] right-4 sm:bottom-6 sm:right-6 bg-background border border-border/60 shadow-2xl rounded-2xl flex flex-col z-50 overflow-hidden transition-all duration-300',
+            isExpanded
+              ? 'w-[calc(100vw-2rem)] h-[min(650px,calc(100dvh-9rem))] sm:w-[560px] sm:h-[720px]'
+              : 'w-[calc(100vw-2rem)] h-[min(520px,calc(100dvh-10rem))] sm:w-[400px] sm:h-[560px]'
+          )}
+        >
+          {/* Header */}
+          <div className="p-3 sm:p-3.5 bg-gradient-to-r from-primary/10 via-indigo-500/10 to-purple-500/10 border-b border-border/60 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="h-9 w-9 shrink-0 overflow-hidden rounded-full bg-white">
+                <img src="/images/assistant-cat.png" alt="" className="h-full w-full object-contain" width="36" height="36" />
+              </div>
+              <div className="min-w-0">
+                <div className="flex items-center gap-1.5">
+                  <p className="font-semibold text-sm leading-none truncate">{currentConfig.name}</p>
+                </div>
               </div>
             </div>
-          ))}
-          {isLoading && (
-            <div className="flex gap-2">
-               <div className="p-3 bg-white dark:bg-muted border border-border/50 rounded-2xl rounded-tl-sm flex items-center gap-2">
-                 <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-                 <span className="text-xs text-muted-foreground">Thinking...</span>
-               </div>
-            </div>
-          )}
-          <div ref={scrollRef} />
-        </div>
-      </ScrollArea>
 
-      <form onSubmit={handleSend} className="p-3 border-t bg-background flex gap-2 items-center">
-        {SpeechRecognition && (
-          <Button 
-            type="button" 
-            variant="ghost" 
-            size="icon" 
-            onClick={toggleListening}
-            className={cn("rounded-full shrink-0 transition-colors", isListening && "bg-red-500/10 text-red-500 hover:bg-red-500/20 hover:text-red-600")}
-            title={isListening ? "Stop listening" : "Start speaking"}
-          >
-            {isListening ? <MicOff className="h-5 w-5 animate-pulse" /> : <Mic className="h-5 w-5" />}
-          </Button>
-        )}
-        <Input 
-          value={input} 
-          onChange={e => setInput(e.target.value)} 
-          placeholder="Ask me to create a task..." 
-          disabled={isLoading}
-          className="rounded-full bg-muted/50"
-        />
-        <Button type="submit" size="icon" disabled={!input.trim() || isLoading} className="rounded-full shrink-0">
-          <Send className="h-4 w-4" />
-        </Button>
-      </form>
-    </div>
+            {/* Header Action Buttons */}
+            <div className="flex items-center gap-0.5 shrink-0">
+              <LocalAISettings />
+              {/* TTS Voice Toggle */}
+              <Button
+                variant="ghost"
+                size="icon"
+                className={cn(
+                  'h-8 w-8 transition-colors',
+                  voiceAudioEnabled
+                    ? 'text-primary hover:bg-primary/15'
+                    : 'text-muted-foreground hover:text-foreground'
+                )}
+                onClick={toggleVoiceAudio}
+                title={voiceAudioEnabled ? 'Voice output on (Click to mute)' : 'Voice output muted (Click to unmute)'}
+              >
+                {voiceAudioEnabled ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4 opacity-70" />}
+              </Button>
+
+              {/* Maximize / Restore */}
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 text-muted-foreground hover:text-foreground hidden sm:flex"
+                onClick={() => setIsExpanded(!isExpanded)}
+                title={isExpanded ? 'Collapse' : 'Expand window'}
+              >
+                {isExpanded ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+              </Button>
+
+              {/* Close */}
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                onClick={() => setIsOpen(false)}
+                title="Close Assistant"
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
+
+          {/* Messages Area */}
+          <ScrollArea className="flex-1 p-3.5 bg-slate-50/40 dark:bg-slate-950/20">
+            <div className="space-y-3.5">
+              {messages.map((m, i) => (
+                <div
+                  key={i}
+                  className={cn(
+                    'flex flex-col',
+                    m.role === 'user' ? 'items-end' : 'items-start'
+                  )}
+                >
+                  <div
+                    className={cn(
+                      'max-w-[88%] rounded-2xl px-3.5 py-2.5 text-sm shadow-xs',
+                      m.role === 'user'
+                        ? 'bg-primary text-primary-foreground rounded-br-xs'
+                        : 'bg-card text-card-foreground border border-border/70 rounded-bl-xs'
+                    )}
+                  >
+                    {m.role === 'user' ? (
+                      <p className="whitespace-pre-wrap">{m.content}</p>
+                    ) : (
+                      <div className="prose prose-sm dark:prose-invert max-w-none text-sm break-words [&>p]:leading-relaxed [&>ul]:my-1.5 [&>ol]:my-1.5 [&>p]:my-1">
+                        <ReactMarkdown>{m.content}</ReactMarkdown>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Tool Action Badge */}
+                  {m.toolCallInfo && (
+                    <div className="mt-1 flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[11px] font-medium border border-emerald-500/20">
+                      <Sparkles className="h-3 w-3 shrink-0" />
+                      <span>{m.toolCallInfo}</span>
+                    </div>
+                  )}
+                </div>
+              ))}
+
+              {/* Loading Indicator */}
+              {isLoading && (
+                <div className="flex items-start gap-2">
+                  <div className="bg-card border border-border/70 rounded-2xl rounded-bl-xs px-3.5 py-2.5 flex items-center gap-2 text-xs text-muted-foreground shadow-xs">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+                    <span>{currentConfig.name} is thinking & checking tasks...</span>
+                  </div>
+                </div>
+              )}
+
+              <div ref={scrollRef} />
+            </div>
+          </ScrollArea>
+
+          {/* Input & Voice Controls */}
+          <form onSubmit={(e) => handleSend(e)} className="p-2.5 sm:p-3 border-t bg-background flex items-center gap-2">
+            {/* Speech-To-Text Mic Button */}
+            {isSpeechSupported && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                onClick={toggleListening}
+                disabled={isLoading}
+                className={cn(
+                  'h-9 w-9 rounded-full shrink-0 transition-all',
+                  isListening
+                    ? 'bg-rose-500 text-white animate-pulse hover:bg-rose-600'
+                    : 'text-muted-foreground hover:text-primary hover:bg-primary/10'
+                )}
+                title={isListening ? 'Listening... click to stop' : 'Click to speak via voice'}
+              >
+                {isListening ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+              </Button>
+            )}
+
+            <Input
+              ref={inputRef}
+              aria-label="Message Milo"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder={isListening ? 'Listening to your voice...' : currentConfig.placeholder}
+              disabled={isLoading}
+              maxLength={600}
+              className="rounded-full bg-muted/40 border-border/60 text-xs sm:text-sm h-9 px-4 focus-visible:ring-1 focus-visible:ring-primary"
+            />
+
+            <Button
+              type="submit"
+              aria-label="Send message"
+              size="icon"
+              disabled={!input.trim() || isLoading}
+              className="h-9 w-9 rounded-full shrink-0 bg-primary text-primary-foreground shadow-xs hover:scale-105 active:scale-95 transition-transform"
+            >
+              <Send className="h-4 w-4" />
+            </Button>
+          </form>
+        </div>
+      )}
+    </>
   );
 };
+
+export default AIAssistantWidget;
+

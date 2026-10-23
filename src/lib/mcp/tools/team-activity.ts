@@ -8,6 +8,7 @@ export default defineTool({
   inputSchema: {},
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   handler: async (input, ctx: ToolContext) => runTool("team_activity", input, ctx, async (_, runtime) => {
+      if (!runtime.isAdmin) return runtime.fail('Only admins can read the team activity tool.');
       const result = await runtime.client.rpc("get_team_activity");
       runtime.logDbResult("team_activity.rpc", result);
       

@@ -7,7 +7,7 @@ export default defineTool({
   title: "List my tasks",
   description: "List tasks belonging to the signed-in user. Optional filters by date (YYYY-MM-DD) or status.",
   inputSchema: {
-    date: z.string().optional().describe("Filter by date (YYYY-MM-DD)"),
+    date: z.iso.date().optional().describe("Filter by date (YYYY-MM-DD)"),
     status: z.enum(["Not Started", "In Progress", "Finished"]).optional(),
     limit: z.number().int().min(1).max(200).optional(),
   },

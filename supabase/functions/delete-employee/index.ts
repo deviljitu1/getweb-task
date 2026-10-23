@@ -37,7 +37,8 @@ Deno.serve(async (req) => {
       .eq('role', 'admin')
       .maybeSingle()
 
-    if (!adminCheck) return json({ error: 'Forbidden: Admin access required' }, 403)
+    const { data: caller } = await admin.from('profiles').select('is_active').eq('user_id', callerId).maybeSingle()
+    if (!adminCheck || !caller?.is_active) return json({ error: 'Forbidden: Admin access required' }, 403)
 
     const { profile_id, user_id } = await req.json()
     if (!profile_id && !user_id) return json({ error: 'profile_id or user_id required' }, 400)
@@ -56,6 +57,7 @@ Deno.serve(async (req) => {
     if (targetUserId === callerId) {
       return json({ error: 'You cannot delete your own account' }, 400)
     }
+    if (!targetUserId || !/^[0-9a-f-]{36}$/i.test(targetUserId)) return json({ error: 'Invalid user ID' }, 400)
 
     // Remove data that doesn't cascade from auth.users
     await admin.from('messages').delete().or(`sender_id.eq.${targetUserId},receiver_id.eq.${targetUserId}`)

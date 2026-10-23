@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useData } from '@/contexts/DataContext';
 import { TASK_CATEGORIES } from '@/types';
@@ -12,10 +12,12 @@ import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Plus } from 'lucide-react';
 
-const AddTaskDialog = () => {
+const AddTaskDialog = ({ trigger, open: controlledOpen, onOpenChange }: { trigger?: ReactNode; open?: boolean; onOpenChange?: (open: boolean) => void }) => {
   const { user } = useAuth();
   const { addTask, members } = useData();
-  const [open, setOpen] = useState(false);
+  const [internalOpen, setInternalOpen] = useState(false);
+  const open = controlledOpen ?? internalOpen;
+  const setOpen = (value: boolean) => { setInternalOpen(value); onOpenChange?.(value); };
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [category, setCategory] = useState('Development');
@@ -63,12 +65,12 @@ const AddTaskDialog = () => {
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        <Button className="shadow-lg shadow-primary/20 bg-primary hover:bg-primary/90 transition-all hover:scale-[1.02]">
+      {trigger !== null && <DialogTrigger asChild>
+        {trigger || <Button className="shadow-lg shadow-primary/20 bg-primary hover:bg-primary/90 transition-all hover:scale-[1.02]">
           <Plus className="h-4 w-4 mr-2" />
           Add Task
-        </Button>
-      </DialogTrigger>
+        </Button>}
+      </DialogTrigger>}
       <DialogContent className="sm:max-w-[425px]">
         <DialogHeader>
           <DialogTitle className="text-xl">Create New Task</DialogTitle>

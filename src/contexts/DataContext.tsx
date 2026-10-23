@@ -1,10 +1,22 @@
 import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
-import { TaskWithSessions, ProfileWithRole, AppRole, Client, Project, TaskPriority, ApprovalStatus } from '@/types';
+import { TaskWithSessions, ProfileWithRole, AppRole, Client, Project, TaskPriority, ApprovalStatus, TaskStatus } from '@/types';
 import { toast } from '@/hooks/use-toast';
 import { getElapsedMs } from '@/lib/utils';
 import { getNotificationPrefs, playNotificationSound } from '@/lib/notifications';
+import { initNotifications, showNativeNotification } from '@/lib/pushNotifications';
+import { crossedReminder } from '@/lib/reminders';
+import {
+  isOnline,
+  enqueueOfflineAction,
+  cacheTasks,
+  getCachedTasks,
+  getOfflineQueue,
+  processOfflineQueue,
+  generateUUID,
+  setOfflineUser,
+} from '@/lib/offlineSync';
 
 export interface NewTaskInput {
   title: string;
@@ -22,7 +34,7 @@ export interface NewTaskInput {
 }
 
 export type TaskUpdateInput = Partial<NewTaskInput> & {
-  status?: string;
+  status?: TaskStatus;
   approval_status?: ApprovalStatus;
   approved_by?: string | null;
   approved_at?: string | null;
@@ -35,7 +47,7 @@ interface DataContextType {
   clients: Client[];
   projects: Project[];
   loading: boolean;
-  addTask: (task: NewTaskInput) => Promise<void>;
+  addTask: (task: NewTaskInput) => Promise<string>;
   updateTask: (id: string, updates: TaskUpdateInput) => Promise<void>;
   deleteTask: (id: string) => Promise<void>;
   startTimer: (taskId: string) => Promise<void>;
@@ -71,21 +83,41 @@ export const useData = () => {
 export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user } = useAuth();
   const [members, setMembers] = useState<ProfileWithRole[]>([]);
-  const [tasks, setTasks] = useState<TaskWithSessions[]>([]);
+  const [tasks, setTasks] = useState<TaskWithSessions[]>(() => getCachedTasks());
   const [clients, setClients] = useState<Client[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
 
   const refreshClients = useCallback(async () => {
     if (!user) return;
-    const { data } = await supabase.from('clients').select('*').order('name');
-    setClients((data as Client[]) || []);
+    try {
+      const { data, error } = await supabase.from('clients').select('*').order('name');
+      if (!error && data) {
+        setClients(data as Client[]);
+        localStorage.setItem('worktracker_cached_clients_v1:' + user.userId, JSON.stringify(data));
+      }
+    } catch {
+      try {
+        const raw = localStorage.getItem('worktracker_cached_clients_v1:' + user.userId);
+        if (raw) setClients(JSON.parse(raw));
+      } catch {}
+    }
   }, [user]);
 
   const refreshProjects = useCallback(async () => {
     if (!user) return;
-    const { data } = await supabase.from('projects').select('*').order('created_at', { ascending: false });
-    setProjects((data as Project[]) || []);
+    try {
+      const { data, error } = await supabase.from('projects').select('*').order('created_at', { ascending: false });
+      if (!error && data) {
+        setProjects(data as Project[]);
+        localStorage.setItem('worktracker_cached_projects_v1:' + user.userId, JSON.stringify(data));
+      }
+    } catch {
+      try {
+        const raw = localStorage.getItem('worktracker_cached_projects_v1:' + user.userId);
+        if (raw) setProjects(JSON.parse(raw));
+      } catch {}
+    }
   }, [user]);
 
   const addClient = useCallback(async (input: Omit<Client, 'id' | 'created_at' | 'updated_at' | 'created_by'>) => {
@@ -128,52 +160,87 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const refreshTasksRef = useRef<(() => Promise<void>) | null>(null);
 
-
   const refreshTasks = useCallback(async () => {
     if (!user) return;
 
-    let query = supabase
-      .from('tasks')
-      .select('*, time_sessions(*)')
-      .order('created_at', { ascending: false });
-
-    // Assuming RLS handles "Admins view all" and "Employees view own".
-    // However, the previous logic explicitly filtered by user.userId if not admin.
-    // If we want Admins to see ALL tasks, we should NOT filter by user.userId for admins.
-
-    if (user.role !== 'admin') {
-      query = query.eq('user_id', user.userId);
+    if (!isOnline()) {
+      const cached = getCachedTasks();
+      if (cached.length > 0) {
+        setTasks(cached);
+      }
+      return;
     }
 
-    // For admins, we fetch everything. The RLS policy "Admins can view all tasks" allows this.
+    try {
+      let query = supabase
+        .from('tasks')
+        .select('*, time_sessions(*)')
+        .order('created_at', { ascending: false });
 
-    const { data } = await query;
-    setTasks((data as unknown as TaskWithSessions[]) || []);
+      if (user.role !== 'admin') {
+        query = query.eq('user_id', user.userId);
+      }
+
+      const { data, error } = await query;
+      if (!error && data) {
+        const loadedTasks = data as unknown as TaskWithSessions[];
+        // Preserve any pending offline tasks that have not yet synced to Supabase
+        const serverIds = new Set(loadedTasks.map(t => t.id));
+        const cached = getCachedTasks();
+        const pendingIds = new Set(getOfflineQueue().filter(action => action.type === 'ADD_TASK').map(action => action.payload.taskId));
+        const pendingLocal = cached.filter(t => pendingIds.has(t.id) && !serverIds.has(t.id));
+        const merged = [...pendingLocal, ...loadedTasks];
+        setTasks(merged);
+        cacheTasks(merged);
+      } else {
+        const cached = getCachedTasks();
+        if (cached.length > 0) setTasks(cached);
+      }
+    } catch (err) {
+      console.warn('Network error fetching tasks, using offline cache:', err);
+      const cached = getCachedTasks();
+      if (cached.length > 0) setTasks(cached);
+    }
   }, [user]);
 
   const refreshMembers = useCallback(async () => {
     if (!user) return;
 
-    const { data: profiles } = await supabase.from('profiles').select('*');
+    try {
+      const { data: profiles } = await supabase.from('profiles').select('*');
 
-    let roles: { user_id: string; role: AppRole }[] = [];
-    if (user.role === 'admin') {
-      const { data } = await supabase.from('user_roles').select('*');
-      if (data) roles = data as { user_id: string; role: AppRole }[];
-    } else {
-      // For non-admin, we can try to fetch roles, but if RLS prevents it, we just proceed.
-      // However, to keep it simple and safe:
-      // The user will see everyone as 'employee' unless we fetch roles differently.
-      // For Chat purposes, 'role' isn't critical.
+      let roles: { user_id: string; role: AppRole }[] = [];
+      if (user.role === 'admin') {
+        const { data } = await supabase.from('user_roles').select('*');
+        if (data) roles = data as { user_id: string; role: AppRole }[];
+      }
+
+      const withRoles: ProfileWithRole[] = (profiles || []).map(p => {
+        const userRoles = roles.filter(r => r.user_id === p.user_id);
+        const isAdmin = userRoles.some(r => r.role === 'admin');
+        return {
+          ...p,
+          role: (isAdmin ? 'admin' : (userRoles[0]?.role as AppRole) || 'employee'),
+        };
+      });
+
+      setMembers(withRoles);
+      localStorage.setItem(`worktracker_cached_members_v1:${user.userId}`, JSON.stringify(withRoles));
+    } catch {
+      try {
+        const raw = localStorage.getItem(`worktracker_cached_members_v1:${user.userId}`);
+        if (raw) setMembers(JSON.parse(raw));
+      } catch {}
     }
-
-    const withRoles: ProfileWithRole[] = (profiles || []).map(p => ({
-      ...p,
-      role: (roles.find(r => r.user_id === p.user_id)?.role as AppRole) || 'employee',
-    }));
-
-    setMembers(withRoles);
   }, [user]);
+
+  useEffect(() => {
+    const handleSyncComplete = () => {
+      refreshTasksRef.current?.();
+    };
+    window.addEventListener('offline-sync-completed', handleSyncComplete);
+    return () => window.removeEventListener('offline-sync-completed', handleSyncComplete);
+  }, []);
 
   useEffect(() => {
     refreshTasksRef.current = refreshTasks;
@@ -181,9 +248,45 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   useEffect(() => {
     if (user) {
+      setOfflineUser(user.userId);
+      setTasks(getCachedTasks());
+      initNotifications(user.userId);
       setLoading(true);
       Promise.all([refreshTasks(), refreshMembers(), refreshClients(), refreshProjects()]).finally(() => setLoading(false));
+
+      // Realtime listener for new user notifications
+      const channel = supabase
+        .channel(`user-notifications-${user.userId}`)
+        .on(
+          'postgres_changes',
+          {
+            event: 'INSERT',
+            schema: 'public',
+            table: 'notifications',
+            filter: `user_id=eq.${user.userId}`,
+          },
+          (payload) => {
+            const notif = payload.new as any;
+            if (notif) {
+              showNativeNotification({
+                title: notif.title || 'New GetWebApp Alert',
+                body: notif.body || '',
+                data: { link_url: notif.link_url },
+              });
+              toast({
+                title: notif.title,
+                description: notif.body,
+              });
+            }
+          }
+        )
+        .subscribe();
+
+      return () => {
+        supabase.removeChannel(channel);
+      };
     } else {
+      setOfflineUser(null);
       setTasks([]);
       setMembers([]);
       setClients([]);
@@ -193,73 +296,38 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [user, refreshTasks, refreshMembers, refreshClients, refreshProjects]);
 
 
-  // Ref to track notified tasks to avoid spam
-  const notifiedTasks = useRef<Record<string, Set<number>>>({});
-
-  // Reminder Logic
+  const previousRemaining = useRef(new Map<string, number>());
   useEffect(() => {
-    if (!tasks || !Array.isArray(tasks) || tasks.length === 0) return;
-
-    const interval = setInterval(() => {
-      const prefs = getNotificationPrefs();
-      if (!prefs.remindersEnabled) return;
-
-      tasks.forEach(task => {
-        if (task && task.status === 'In Progress' && task.target_minutes && task.time_sessions) {
-          const sessions = task.time_sessions || [];
-          const elapsedMs = getElapsedMs(sessions);
-          const elapsedMinutes = elapsedMs / (1000 * 60);
-          const remaining = task.target_minutes - elapsedMinutes;
-
-          if (!notifiedTasks.current[task.id]) {
-            notifiedTasks.current[task.id] = new Set();
-          }
-          const notifiedSet = notifiedTasks.current[task.id];
-
-          if (remaining <= 10 && remaining > 5 && !notifiedSet.has(10)) {
-            playNotificationSound();
-            toast({
-              title: 'Reminder: 10 minutes remaining',
-              description: `Task "${task.title}" is due in 10 minutes.`,
-              duration: 6000,
-            });
-            notifiedSet.add(10);
-          }
-
-          if (remaining <= 5 && remaining > 0 && !notifiedSet.has(5)) {
-            playNotificationSound();
-            toast({
-              title: 'Critical: 5 minutes remaining',
-              description: `Task "${task.title}" is due in 5 minutes.`,
-              variant: 'destructive',
-              duration: 6000,
-            });
-            notifiedSet.add(5);
-          }
-
-          if (remaining <= 0 && !notifiedSet.has(0)) {
-            playNotificationSound();
-            toast({
-              title: "Time's up",
-              description: `Time limit for task "${task.title}" has been reached.`,
-              variant: 'destructive',
-              duration: 6000,
-            });
-            notifiedSet.add(0);
-          }
-        }
-      });
+    for (const task of tasks) {
+      if (task.status !== 'In Progress' || !task.target_minutes) { previousRemaining.current.delete(task.id); continue; }
+      if (!previousRemaining.current.has(task.id)) previousRemaining.current.set(task.id, task.target_minutes - getElapsedMs(task.time_sessions) / 60000);
+    }
+    const interval = window.setInterval(() => {
+      for (const task of tasks) {
+        if (task.status !== 'In Progress' || !task.target_minutes) continue;
+        const remaining = task.target_minutes - getElapsedMs(task.time_sessions) / 60000;
+        const threshold = crossedReminder(previousRemaining.current.get(task.id), remaining);
+        previousRemaining.current.set(task.id, remaining);
+        if (threshold === null || !getNotificationPrefs().remindersEnabled) continue;
+        const title = threshold === 0 ? 'Time limit reached' : threshold + ' minutes remaining';
+        const body = 'Task: ' + task.title;
+        if (document.visibilityState === 'visible') {
+          playNotificationSound();
+          toast({ title, description: body, duration: 4500 });
+        } else void showNativeNotification({ title, body });
+      }
     }, 15000);
-
     return () => clearInterval(interval);
   }, [tasks]);
 
   const addTask = useCallback(async (task: NewTaskInput) => {
-    if (!user) return;
+    if (!user) throw new Error('Sign in before changing tasks.');
     const targetUserId = task.user_id || user.userId;
-    const isSelfAssigned = targetUserId === user.userId;
-    const needsApproval = user.role !== 'admin' ? false : false; // admins auto-approve; team completions later flip to Pending on finish
-    const { error } = await supabase.from('tasks').insert({
+    const taskId = generateUUID();
+    const nowIso = new Date().toISOString();
+
+    const optimisticTask: TaskWithSessions = {
+      id: taskId,
       user_id: targetUserId,
       title: task.title,
       description: task.description || '',
@@ -272,82 +340,289 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       due_date: task.due_date ?? null,
       is_billable: task.is_billable ?? false,
       hourly_rate_override: task.hourly_rate_override ?? null,
+      status: 'Not Started',
+      approval_status: 'Pending',
+      approved_by: null,
+      approved_at: null,
+      rejection_reason: null,
+      completion_notes: null,
+      project_link: null,
+      recurring_template_id: null,
+      created_at: nowIso,
+      updated_at: nowIso,
+      time_sessions: [],
+    };
+
+    // Optimistically update local state & cache
+    setTasks(prev => {
+      const updated = [optimisticTask, ...prev];
+      cacheTasks(updated);
+      return updated;
     });
-    if (error) {
-      console.error('Error adding task:', error);
-      throw error;
+
+    if (!isOnline()) {
+      enqueueOfflineAction('ADD_TASK', { taskInput: task, userId: targetUserId, taskId });
+      toast({
+        title: 'Task Created Offline 📴',
+        description: 'Saved locally. Will sync automatically once connected.',
+      });
+      return taskId;
     }
-    await refreshTasks();
+
+    try {
+      const { error } = await supabase.from('tasks').insert({
+        id: taskId,
+        user_id: targetUserId,
+        title: task.title,
+        description: task.description || '',
+        category: task.category,
+        date: task.date,
+        target_minutes: task.target_minutes || null,
+        client_id: task.client_id ?? null,
+        project_id: task.project_id ?? null,
+        priority: task.priority ?? 'Medium',
+        due_date: task.due_date ?? null,
+        is_billable: task.is_billable ?? false,
+        hourly_rate_override: task.hourly_rate_override ?? null,
+      });
+
+      if (error) throw error;
+      await refreshTasks();
+    } catch (err) {
+      if (isOnline()) {
+        setTasks(prev => { const next = prev.filter(t => t.id !== taskId); cacheTasks(next); return next; });
+        throw err;
+      }
+      console.warn('Network issue adding task, queuing offline:', err);
+      enqueueOfflineAction('ADD_TASK', { taskInput: task, userId: targetUserId, taskId });
+      toast({
+        title: 'Saved Offline 📴',
+        description: 'Network disconnected. Task queued for automatic sync.',
+      });
+    }
+    return taskId;
   }, [user, refreshTasks]);
 
   const updateTask = useCallback(async (id: string, updates: TaskUpdateInput) => {
-    await supabase.from('tasks').update(updates as never).eq('id', id);
-    await refreshTasks();
+    setTasks(prev => {
+      const updated = prev.map(t => (t.id === id ? { ...t, ...updates } : t));
+      cacheTasks(updated);
+      return updated;
+    });
+
+    if (!isOnline()) {
+      enqueueOfflineAction('UPDATE_TASK', { id, updates });
+      return;
+    }
+
+    try {
+      await supabase.from('tasks').update(updates as never).eq('id', id).throwOnError();
+      await refreshTasks();
+    } catch (err) {
+      if (isOnline()) { await refreshTasks(); throw err; }
+      console.warn('Network issue updating task, queuing offline:', err);
+      enqueueOfflineAction('UPDATE_TASK', { id, updates });
+    }
   }, [refreshTasks]);
 
   const deleteTask = useCallback(async (id: string) => {
-    await supabase.from('tasks').delete().eq('id', id);
-    await refreshTasks();
-  }, [refreshTasks]);
+    setTasks(prev => {
+      const updated = prev.filter(t => t.id !== id);
+      cacheTasks(updated);
+      return updated;
+    });
 
+    if (!isOnline()) {
+      enqueueOfflineAction('DELETE_TASK', { id });
+      return;
+    }
+
+    try {
+      await supabase.from('tasks').delete().eq('id', id).throwOnError();
+      await refreshTasks();
+    } catch (err) {
+      if (isOnline()) { await refreshTasks(); throw err; }
+      console.warn('Network issue deleting task, queuing offline:', err);
+      enqueueOfflineAction('DELETE_TASK', { id });
+    }
+  }, [refreshTasks]);
 
   const startTimer = useCallback(async (taskId: string) => {
     if (!user) return;
+    const now = Date.now();
+    const sessionId = generateUUID();
 
-    // Close any open sessions for other tasks of this user
-    const openSessions = tasks
-      .filter(t => t.user_id === user.userId && t.id !== taskId)
-      .flatMap(t => t.time_sessions.filter(s => s.end_time === null));
-
-    for (const session of openSessions) {
-      await supabase.from('time_sessions').update({ end_time: Date.now() }).eq('id', session.id);
-    }
-
-    // Start new session
-    await supabase.from('time_sessions').insert({
-      task_id: taskId,
-      start_time: Date.now(),
+    // Optimistically update local state & cache
+    setTasks(prev => {
+      const updated = prev.map(t => {
+        if (t.user_id === user.userId && t.id !== taskId) {
+          const closedSessions = (t.time_sessions || []).map(s =>
+            s.end_time === null ? { ...s, end_time: now } : s
+          );
+          return {
+            ...t,
+            status: (t.status === 'In Progress' ? 'Not Started' : t.status) as TaskStatus,
+            time_sessions: closedSessions,
+          };
+        }
+        if (t.id === taskId) {
+          const newSession = {
+            id: sessionId,
+            task_id: taskId,
+            start_time: now,
+            end_time: null,
+            created_by: user.userId,
+          };
+          return {
+            ...t,
+            status: 'In Progress' as TaskStatus,
+            time_sessions: [...(t.time_sessions || []), newSession],
+          };
+        }
+        return t;
+      });
+      cacheTasks(updated);
+      return updated;
     });
 
-    // Update task status
-    await supabase.from('tasks').update({ status: 'In Progress' }).eq('id', taskId);
-    await refreshTasks();
+    if (!isOnline()) {
+      enqueueOfflineAction('START_TIMER', { taskId, startTime: now, sessionId });
+      toast({
+        title: 'Timer Started Offline ⏱️',
+        description: 'Tracking locally. Will sync automatically once connected.',
+      });
+      return;
+    }
+
+    try {
+      // Close any open sessions for other tasks of this user
+      const openSessions = tasks
+        .filter(t => t.user_id === user.userId && t.id !== taskId)
+        .flatMap(t => t.time_sessions.filter(s => s.end_time === null));
+
+      for (const session of openSessions) {
+        await supabase.from('time_sessions').update({ end_time: now }).eq('id', session.id).throwOnError();
+      }
+
+      await supabase.from('time_sessions').insert({
+        id: sessionId,
+        task_id: taskId,
+        start_time: now,
+      }).throwOnError();
+
+      await supabase.from('tasks').update({ status: 'In Progress' }).eq('id', taskId).throwOnError();
+      await refreshTasks();
+    } catch (err) {
+      if (isOnline()) { await refreshTasks(); throw err; }
+      console.warn('Network issue starting timer, queuing offline:', err);
+      enqueueOfflineAction('START_TIMER', { taskId, startTime: now, sessionId });
+    }
   }, [user, tasks, refreshTasks]);
 
   const pauseTimer = useCallback(async (taskId: string) => {
-    const task = tasks.find(t => t.id === taskId);
-    if (!task) return;
+    const now = Date.now();
 
-    const openSessions = task.time_sessions.filter(s => s.end_time === null);
-    for (const session of openSessions) {
-      await supabase.from('time_sessions').update({ end_time: Date.now() }).eq('id', session.id);
+    // Optimistically update local state & cache
+    setTasks(prev => {
+      const updated = prev.map(t => {
+        if (t.id === taskId) {
+          const closed = (t.time_sessions || []).map(s =>
+            s.end_time === null ? { ...s, end_time: now } : s
+          );
+          return { ...t, time_sessions: closed };
+        }
+        return t;
+      });
+      cacheTasks(updated);
+      return updated;
+    });
+
+    if (!isOnline()) {
+      enqueueOfflineAction('PAUSE_TIMER', { taskId, endTime: now });
+      toast({
+        title: 'Timer Paused Offline ⏸️',
+        description: 'Session saved locally. Will sync when reconnected.',
+      });
+      return;
     }
-    await refreshTasks();
+
+    try {
+      const task = tasks.find(t => t.id === taskId);
+      if (!task) return;
+
+      const openSessions = task.time_sessions.filter(s => s.end_time === null);
+      for (const session of openSessions) {
+        await supabase.from('time_sessions').update({ end_time: now }).eq('id', session.id).throwOnError();
+      }
+      await refreshTasks();
+    } catch (err) {
+      if (isOnline()) { await refreshTasks(); throw err; }
+      console.warn('Network issue pausing timer, queuing offline:', err);
+      enqueueOfflineAction('PAUSE_TIMER', { taskId, endTime: now });
+    }
   }, [tasks, refreshTasks]);
 
   const finishTask = useCallback(async (taskId: string, details?: { completion_notes?: string; project_link?: string }) => {
     const task = tasks.find(t => t.id === taskId);
-    if (!task || !user) return;
-
-    const openSessions = task.time_sessions.filter(s => s.end_time === null);
-    for (const session of openSessions) {
-      await supabase.from('time_sessions').update({ end_time: Date.now() }).eq('id', session.id);
-    }
-
+    if (!task || !user) throw new Error('Task unavailable. Refresh and try again.');
+    const now = Date.now();
     const isAdmin = user.role === 'admin';
-    const updates: Record<string, unknown> = {
-      status: 'Finished',
-      approval_status: isAdmin ? 'Approved' : 'Pending',
-    };
-    if (isAdmin) {
-      updates.approved_by = user.userId;
-      updates.approved_at = new Date().toISOString();
-    }
-    if (details?.completion_notes) updates.completion_notes = details.completion_notes;
-    if (details?.project_link) updates.project_link = details.project_link;
 
-    await supabase.from('tasks').update(updates as never).eq('id', taskId);
-    await refreshTasks();
+    // Optimistically update local state & cache
+    setTasks(prev => {
+      const updated = prev.map(t => {
+        if (t.id === taskId) {
+          const closed = (t.time_sessions || []).map(s =>
+            s.end_time === null ? { ...s, end_time: now } : s
+          );
+          return {
+            ...t,
+            status: 'Finished' as TaskStatus,
+            approval_status: (isAdmin ? 'Approved' : 'Pending') as ApprovalStatus,
+            completion_notes: details?.completion_notes || t.completion_notes,
+            project_link: details?.project_link || t.project_link,
+            time_sessions: closed,
+          };
+        }
+        return t;
+      });
+      cacheTasks(updated);
+      return updated;
+    });
+
+    if (!isOnline()) {
+      enqueueOfflineAction('FINISH_TASK', { taskId, details, endTime: now });
+      toast({
+        title: 'Task Finished Offline ✅',
+        description: 'Saved locally. Will sync automatically once connected.',
+      });
+      return;
+    }
+
+    try {
+      const openSessions = task.time_sessions.filter(s => s.end_time === null);
+      for (const session of openSessions) {
+        await supabase.from('time_sessions').update({ end_time: now }).eq('id', session.id).throwOnError();
+      }
+
+      const updates: Record<string, unknown> = {
+        status: 'Finished',
+        approval_status: isAdmin ? 'Approved' : 'Pending',
+      };
+      if (isAdmin) {
+        updates.approved_by = user.userId;
+        updates.approved_at = new Date().toISOString();
+      }
+      if (details?.completion_notes) updates.completion_notes = details.completion_notes;
+      if (details?.project_link) updates.project_link = details.project_link;
+
+      await supabase.from('tasks').update(updates as never).eq('id', taskId).throwOnError();
+      await refreshTasks();
+    } catch (err) {
+      if (isOnline()) { await refreshTasks(); throw err; }
+      console.warn('Network issue finishing task, queuing offline:', err);
+      enqueueOfflineAction('FINISH_TASK', { taskId, details, endTime: now });
+    }
   }, [tasks, user, refreshTasks]);
 
   const approveTask = useCallback(async (taskId: string) => {

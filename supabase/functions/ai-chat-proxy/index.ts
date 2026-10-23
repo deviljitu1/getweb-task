@@ -1,11 +1,11 @@
-// AI chat proxy — forwards chat completion requests to the Lovable AI Gateway
+// AI chat proxy — forwards chat completion requests to Groq
 // so the model key never leaves the server. Requires an authenticated Supabase session.
 
 import { corsHeaders } from 'npm:@supabase/supabase-js@2/cors';
 import { createClient } from 'npm:@supabase/supabase-js@2';
 
-const GATEWAY_URL = 'https://ai.gateway.lovable.dev/v1/chat/completions';
-const DEFAULT_MODEL = 'google/gemini-2.5-flash';
+const GATEWAY_URL = 'https://api.groq.com/openai/v1/chat/completions';
+const DEFAULT_MODEL = 'openai/gpt-oss-120b';
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -34,8 +34,8 @@ Deno.serve(async (req) => {
       );
     }
 
-    const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
-    if (!LOVABLE_API_KEY) {
+    const apiKey = Deno.env.get('GROQ_API_KEY');
+    if (!apiKey) {
       return new Response(
         JSON.stringify({ error: 'AI not configured' }),
         { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
@@ -51,8 +51,10 @@ Deno.serve(async (req) => {
     }
 
     const payload: Record<string, unknown> = {
-      model: typeof body.model === 'string' ? body.model : DEFAULT_MODEL,
+      model: Deno.env.get('GROQ_MODEL') || DEFAULT_MODEL,
       messages: body.messages,
+      max_completion_tokens: 2048,
+      parallel_tool_calls: false,
     };
     if (body.tools) payload.tools = body.tools;
     if (body.tool_choice) payload.tool_choice = body.tool_choice;
@@ -61,7 +63,7 @@ Deno.serve(async (req) => {
     const resp = await fetch(GATEWAY_URL, {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
+        Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(payload),

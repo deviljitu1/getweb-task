@@ -10,6 +10,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import EditTaskDialog from './EditTaskDialog';
 import FinishTaskDialog from './FinishTaskDialog';
+import TaskChecklist from './TaskChecklist';
 
 const statusConfig: Record<TaskStatus, { className: string; label: string }> = {
   'Not Started': { className: 'bg-muted text-muted-foreground border-transparent', label: 'Not Started' },
@@ -178,10 +179,12 @@ const TaskCard = ({ task, showUser, readOnly }: TaskCardProps) => {
                 </div>
               )}
 
+              {/* Subtasks and checklist progress */}
+              <TaskChecklist task={task} />
             </div>
           </div>
 
-          <div className="flex sm:flex-col items-center sm:items-end justify-between sm:justify-center gap-4 min-w-[120px]">
+          <div className="flex sm:flex-col items-center sm:items-end justify-between sm:justify-center gap-4 min-w-0 sm:min-w-[120px]">
             <div className={cn(
               "flex items-center gap-2 font-mono text-sm px-3 py-1.5 rounded-lg border transition-colors",
               isRunning ? "bg-primary text-primary-foreground border-primary shadow-sm" : "bg-muted/30 border-border text-muted-foreground"

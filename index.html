@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>WorkTracker — Team Time &amp; Task Tracking</title>
+    <title>GetWebApp — Team workspace</title>
     <meta name="description" content="WorkTracker helps teams log daily tasks, track time with live timers, manage clients and projects, and share clear work reports." />
     <meta name="author" content="WorkTracker" />
 
@@ -23,13 +23,16 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="icon" type="image/png" href="/favicon.png">
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+    <link rel="manifest" href="/manifest.webmanifest">
+    <meta name="theme-color" content="#ffffff">
     <script type="application/ld+json">
       {"@context":"https://schema.org","@type":"SoftwareApplication","name":"WorkTracker","applicationCategory":"BusinessApplication","operatingSystem":"Web","url":"https://getweb-task.lovable.app/","description":"Team time and task tracking with live timers, clients, projects and reports."}
     </script>
   </head>
 
   <body>
-    <div id="root"></div>
+    <div id="root"><div role="status" aria-label="Loading workspace" style="display:flex;min-height:100dvh;align-items:center;justify-content:center;background:#fff"><img src="/images/getweb-loader.svg" alt="" width="128" height="128"></div></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

@@ -1,8 +1,33 @@
-project_id = "tbigtlfuittunagpyoxk"
+project_id = "jrvyhixqvncaoxvrefgu"
 
 [functions.mcp-server]
+verify_jwt = false
+
+[functions.mcp]
 verify_jwt = false
 
 [functions.client-report]
 verify_jwt = false
 
+# These functions verify signed-in users in their own handlers.
+[functions.ai-chat-proxy]
+verify_jwt = false
+
+[functions.ai-assistant]
+verify_jwt = false
+
+[functions.send-push-notification]
+verify_jwt = true
+
+
+[functions.livekit-token]
+verify_jwt = false
+
+[functions.create-employee]
+verify_jwt = false
+
+[functions.delete-employee]
+verify_jwt = false
+
+[functions.update-member-password]
+verify_jwt = false

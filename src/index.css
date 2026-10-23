@@ -101,3 +101,8 @@
     @apply bg-white/60 backdrop-blur-md border border-white/20 shadow-sm dark:bg-black/40 dark:border-white/10;
   }
 }
+
+@keyframes getweb-loader {
+  0%, 100% { transform: translateY(0) scale(0.98); opacity: 0.85; }
+  50% { transform: translateY(-3px) scale(1); opacity: 1; }
+}
