@@ -34,7 +34,7 @@ const Members = ({ dialogOnly = false, onClose }: { dialogOnly?: boolean; onClos
   const [deletingMember, setDeletingMember] = useState<ProfileWithRole | null>(null);
 
   const memberList = members
-    .filter(e => user?.role === 'admin' ? e.user_id !== user.userId : e.role === 'employee')
+    .filter(e => user?.role === 'admin' || e.user_id === user?.userId || e.role === 'employee')
     .filter(e => (e.name + ' ' + (e.employee_type || '') + ' ' + (e.role || '')).toLowerCase().includes(searchQuery.toLowerCase()));
 
   const handleAdd = async (e: React.FormEvent) => {

@@ -1,6 +1,7 @@
 import { Bell, MoreVertical, Pencil, Phone, Search, Trash2, UserCheck, UserX } from 'lucide-react';
 import type { ProfileWithRole } from '@/types';
 import PresenceBadge from '@/components/PresenceBadge';
+import { useAuth } from '@/contexts/AuthContext';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -21,14 +22,16 @@ type Props = {
 };
 
 export default function TeamDirectory({ members, search, onSearch, onCall, onRing, onEdit, onToggle, onDelete }: Props) {
+  const { user } = useAuth();
+  const isSelf = (member: ProfileWithRole) => member.user_id === user?.userId;
   const actions = (member: ProfileWithRole) => <DropdownMenu>
     <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" className="h-9 w-9 shrink-0" aria-label={`Actions for ${member.name}`}><MoreVertical className="h-4 w-4" /></Button></DropdownMenuTrigger>
     <DropdownMenuContent align="end">
-      <DropdownMenuItem disabled={!member.is_active} onClick={() => onCall(member)}><Phone className="mr-2 h-4 w-4" />Audio call</DropdownMenuItem>
-      <DropdownMenuItem disabled={!member.is_active} onClick={() => onRing(member)}><Bell className="mr-2 h-4 w-4" />Ring member</DropdownMenuItem>
+      <DropdownMenuItem disabled={isSelf(member) || !member.is_active} onClick={() => onCall(member)}><Phone className="mr-2 h-4 w-4" />Audio call</DropdownMenuItem>
+      <DropdownMenuItem disabled={isSelf(member) || !member.is_active} onClick={() => onRing(member)}><Bell className="mr-2 h-4 w-4" />Ring member</DropdownMenuItem>
       <DropdownMenuItem onClick={() => onEdit(member)}><Pencil className="mr-2 h-4 w-4" />Edit details</DropdownMenuItem>
-      <DropdownMenuItem onClick={() => onToggle(member)}>{member.is_active ? <UserX className="mr-2 h-4 w-4" /> : <UserCheck className="mr-2 h-4 w-4" />}{member.is_active ? 'Deactivate' : 'Activate'}</DropdownMenuItem>
-      <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={() => onDelete(member)}><Trash2 className="mr-2 h-4 w-4" />Delete member</DropdownMenuItem>
+      <DropdownMenuItem disabled={isSelf(member)} onClick={() => onToggle(member)}>{member.is_active ? <UserX className="mr-2 h-4 w-4" /> : <UserCheck className="mr-2 h-4 w-4" />}{member.is_active ? 'Deactivate' : 'Activate'}</DropdownMenuItem>
+      <DropdownMenuItem disabled={isSelf(member)} className="text-destructive focus:text-destructive" onClick={() => onDelete(member)}><Trash2 className="mr-2 h-4 w-4" />Delete member</DropdownMenuItem>
     </DropdownMenuContent>
   </DropdownMenu>;
   const avatar = (member: ProfileWithRole) => <Avatar className="h-8 w-8 shrink-0"><AvatarFallback className="bg-primary/10 text-xs font-semibold text-primary">{member.name.split(' ').map(part => part[0]).slice(0, 2).join('')}</AvatarFallback></Avatar>;
@@ -45,12 +48,12 @@ export default function TeamDirectory({ members, search, onSearch, onCall, onRin
         <div className="min-w-0 flex-1 cursor-pointer" onClick={() => onEdit(member)}>
           <div className="flex items-center gap-1.5">
             <p className="truncate text-sm font-semibold">{member.name}</p>
-            {member.role === 'admin' && <Badge variant="outline" className="text-[10px] py-0 px-1 border-primary/40 text-primary">Admin</Badge>}
+            {isSelf(member) && <Badge variant="secondary" className="text-[10px] py-0 px-1">You</Badge>}
           </div>
-          <p className="mt-0.5 truncate text-xs text-muted-foreground">{member.employee_type}</p>
+          <p className="mt-0.5 truncate text-xs text-muted-foreground">{member.employee_type === 'Other' ? 'Team member' : member.employee_type}</p>
         </div>
         {status(member)}
-        <Button variant="ghost" size="icon" className="h-9 w-9 text-destructive hover:bg-destructive/10 shrink-0" onClick={() => onDelete(member)} aria-label={`Delete ${member.name}`}>
+        <Button disabled={isSelf(member)} variant="ghost" size="icon" className="h-9 w-9 text-destructive hover:bg-destructive/10 shrink-0" onClick={() => onDelete(member)} aria-label={`Delete ${member.name}`}>
           <Trash2 className="h-4 w-4" />
         </Button>
         {actions(member)}
@@ -61,15 +64,15 @@ export default function TeamDirectory({ members, search, onSearch, onCall, onRin
             {avatar(member)}
             <div className="flex items-center gap-1.5">
               <span className="text-sm font-medium">{member.name}</span>
-              {member.role === 'admin' && <Badge variant="outline" className="text-[10px] py-0 px-1 border-primary/40 text-primary">Admin</Badge>}
+              {isSelf(member) && <Badge variant="secondary" className="text-[10px] py-0 px-1">You</Badge>}
             </div>
           </div>
         </TableCell>
-        <TableCell className="py-2.5 text-xs text-muted-foreground">{member.employee_type}</TableCell>
+        <TableCell className="py-2.5 text-xs text-muted-foreground">{member.employee_type === 'Other' ? 'Team member' : member.employee_type}</TableCell>
         <TableCell className="py-2.5">{status(member)}</TableCell>
         <TableCell className="py-2 pr-4 text-right">
           <div className="flex items-center justify-end gap-1">
-            <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:bg-destructive/10" onClick={() => onDelete(member)} title="Delete member from database">
+            <Button disabled={isSelf(member)} variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:bg-destructive/10" onClick={() => onDelete(member)} title="Delete member from database">
               <Trash2 className="h-4 w-4" />
             </Button>
             {actions(member)}
