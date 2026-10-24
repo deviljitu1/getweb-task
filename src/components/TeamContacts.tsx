@@ -44,8 +44,8 @@ export default function TeamContacts({ members, selected, unread, onSelect }: { 
       await deleteMember(deleting.id, deleting.user_id);
       toast.success(`${deleting.name} deleted from database`);
       setDeleting(null);
-    } catch (err: any) {
-      toast.error(err.message || 'Failed to delete member');
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : 'Failed to delete member');
     } finally {
       setIsDeleting(false);
     }
@@ -53,16 +53,17 @@ export default function TeamContacts({ members, selected, unread, onSelect }: { 
 
   return <>
     {members.map(member => {
+      const isSelf = member.user_id === user?.userId;
       const work = activity.data?.find(item => item.user_id === member.user_id);
       return (
         <div key={member.user_id} className={`flex items-center gap-1 rounded-xl ${selected === member.user_id ? 'bg-primary/10' : 'hover:bg-muted/50'}`}>
-          <button className="flex min-w-0 flex-1 items-center gap-2.5 p-3 text-left" onClick={() => onSelect(member.user_id)}>
+          <button className="flex min-w-0 flex-1 items-center gap-2.5 p-3 text-left" onClick={() => isSelf ? setDetail(member) : onSelect(member.user_id)}>
             <Avatar className="h-10 w-10 shrink-0">
               <AvatarFallback className="bg-primary/10 text-xs font-semibold text-primary">{member.name.split(' ').map(part => part[0]).slice(0, 2).join('')}</AvatarFallback>
             </Avatar>
             <span className="min-w-0 flex-1">
-              <span className="block truncate text-sm font-semibold">{member.name}</span>
-              <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">{work?.current_task_title || member.employee_type}</span>
+              <span className="block truncate text-sm font-semibold">{isSelf ? 'You' : member.name}</span>
+              <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">{isSelf ? member.name : work?.current_task_title || (member.employee_type === 'Other' ? 'Team member' : member.employee_type)}</span>
               <span className="mt-1 block"><PresenceBadge userId={member.user_id} enabled={member.is_active} /></span>
             </span>
             {unread[member.user_id] > 0 && <span className="rounded-full bg-primary px-1.5 py-0.5 text-[10px] text-primary-foreground">{unread[member.user_id]}</span>}
@@ -77,12 +78,12 @@ export default function TeamContacts({ members, selected, unread, onSelect }: { 
               <DropdownMenuItem onClick={() => setDetail(member)}>
                 <Info className="mr-2 h-4 w-4" />Profile & activity
               </DropdownMenuItem>
-              <DropdownMenuItem disabled={!member.is_active} onClick={() => startAudioCall(member.user_id, member.name)}>
+              {!isSelf && <DropdownMenuItem disabled={!member.is_active} onClick={() => startAudioCall(member.user_id, member.name)}>
                 <Phone className="mr-2 h-4 w-4" />Audio call
-              </DropdownMenuItem>
-              <DropdownMenuItem disabled={!member.is_active} onClick={() => { void ringMember(member.user_id, member.name); }}>
+              </DropdownMenuItem>}
+              {!isSelf && <DropdownMenuItem disabled={!member.is_active} onClick={() => { void ringMember(member.user_id, member.name); }}>
                 <Bell className="mr-2 h-4 w-4" />Ring member
-              </DropdownMenuItem>
+              </DropdownMenuItem>}
               {user?.role === 'admin' && user.userId !== member.user_id && (
                 <>
                   <DropdownMenuItem onClick={() => setEditing(member)}>

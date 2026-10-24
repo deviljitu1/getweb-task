@@ -23,6 +23,7 @@ import { LEAD_STAGES, type AgencyLead, type LeadActivity, type LeadInsert } from
 import { followUpDue, isOpenLead, money, pipelineSummary } from '@/lib/crm';
 import { cn } from '@/lib/utils';
 import Seo from '@/components/Seo';
+import InfoHint from '@/components/InfoHint';
 
 const dateLabel = (value: string) => isValid(new Date(value)) ? format(new Date(value), 'dd MMM, h:mm a') : 'Choose a date';
 
@@ -83,7 +84,7 @@ export default function AgencyCRM() {
 
   return <div className="space-y-6 pb-16">
     <Seo title="Agency CRM — GetWebApp" description="Agency sales pipeline, client relationships, and project delivery." path="/crm" noindex />
-    <header className="flex flex-col justify-between gap-4 pr-8 sm:flex-row sm:items-center"><div><p className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-primary"><Handshake className="h-4 w-4" />Agency workspace</p><h1 className="text-3xl font-bold tracking-tight">Relationships that grow.</h1><p className="mt-2 text-sm text-muted-foreground">From the first conversation to your next long-term client.</p></div><Button onClick={() => setEditing('new')} className="w-fit gap-2"><Plus className="h-4 w-4" />New opportunity</Button></header>
+    <header className="flex flex-wrap items-center justify-between gap-3"><div className="flex items-center gap-1"><h1 className="text-2xl font-bold tracking-tight">Agency CRM</h1><InfoHint title="Agency CRM">Manage opportunities, follow-ups, clients and projects from the first conversation through delivery.</InfoHint></div><Button onClick={() => setEditing('new')} className="w-fit gap-2"><Plus className="h-4 w-4" />New opportunity</Button></header>
     <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">{[
       { label: 'Open pipeline', value: money(stats.value), detail: `${stats.open} active opportunities / month`, icon: TrendingUp, color: 'text-primary bg-primary/10' },
       { label: 'Follow-ups due', value: stats.due, detail: 'Conversations waiting for you', icon: CalendarClock, color: 'text-amber-600 bg-amber-500/10' },

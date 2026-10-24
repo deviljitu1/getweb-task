@@ -106,3 +106,16 @@
   0%, 100% { transform: translateY(0) scale(0.98); opacity: 0.85; }
   50% { transform: translateY(-3px) scale(1); opacity: 1; }
 }
+@keyframes milo-reveal {
+  0% { clip-path: circle(0% at 100% 100%); transform: translateY(6px) scale(.98); }
+  55% { clip-path: circle(75% at 100% 100%); transform: translateY(0) scale(1); }
+  100% { clip-path: circle(150% at 100% 100%); transform: none; }
+}
+@keyframes milo-colour-spread {
+  from { opacity: .32; transform: scale(.1); }
+  to { opacity: 0; transform: scale(1.5); }
+}
+.milo-panel { transform-origin: bottom right; animation: milo-reveal 300ms cubic-bezier(.2,0,0,1) both; }
+.milo-panel::after { content: ''; position: absolute; inset: 0; pointer-events: none; border-radius: inherit; background: radial-gradient(circle at bottom right, hsl(var(--primary)), transparent 75%); transform-origin: bottom right; animation: milo-colour-spread 350ms ease-out both; }
+.milo-panel-closing { animation: milo-reveal 180ms cubic-bezier(.3,0,1,1) reverse both; }
+@media (prefers-reduced-motion: reduce) { .milo-panel, .milo-panel::after { animation: none; } }

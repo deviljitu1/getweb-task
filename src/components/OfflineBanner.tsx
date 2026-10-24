@@ -48,7 +48,7 @@ export const OfflineBanner: React.FC = () => {
   }
 
   return (
-    <aside aria-label="Offline status" className="sticky top-0 z-50 w-full transition-all duration-300 animate-in fade-in slide-in-from-top-2">
+    <aside aria-label="Offline status" className="sticky top-0 z-50 w-full shrink-0 transition-all duration-300 animate-in fade-in slide-in-from-top-2">
       {!online ? (
         <div className="bg-amber-500/95 dark:bg-amber-600/95 text-amber-950 dark:text-white px-4 py-2 shadow-md backdrop-blur-sm flex items-center justify-between text-sm">
           <div className="flex items-center gap-2 font-medium">

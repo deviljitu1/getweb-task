@@ -5,8 +5,9 @@ import { supabase } from '@/integrations/supabase/client';
 import { getNotificationPrefs, playNotificationSound } from '@/lib/notifications';
 
 const CHANNEL_ID = 'getwebapp_alerts';
-const REMOTE_PUSH_ENABLED = import.meta.env.VITE_ENABLE_PUSH_NOTIFICATIONS === 'true';
+const REMOTE_PUSH_ENABLED = import.meta.env.VITE_ENABLE_PUSH_NOTIFICATIONS !== 'false' && import.meta.env.VITE_NATIVE_PUSH_CONFIGURED === 'true';
 let isInitialized = false;
+const displayedNotifications = new Map<string, number>();
 
 export interface NotificationPayload {
   title: string;
@@ -87,9 +88,8 @@ export async function initNotifications(userId?: string) {
 
           // Handle user clicking on a push notification
           PushNotifications.addListener('pushNotificationActionPerformed', (action) => {
-            console.log('[Notifications] Push notification tapped:', action);
             const link = action.notification.data?.link_url;
-            if (link && typeof window !== 'undefined') {
+            if (typeof link === 'string' && /^\/(?!\/)[^\\\s]*$/.test(link) && typeof window !== 'undefined') {
               window.location.href = link;
             }
           });
@@ -101,9 +101,8 @@ export async function initNotifications(userId?: string) {
 
       // Handle user clicking on local notifications
       LocalNotifications.addListener('localNotificationActionPerformed', (action) => {
-        console.log('[Notifications] Local notification tapped:', action);
         const link = action.notification.extra?.link_url;
-        if (link && typeof window !== 'undefined') {
+        if (typeof link === 'string' && /^\/(?!\/)[^\\\s]*$/.test(link) && typeof window !== 'undefined') {
           window.location.href = link;
         }
       });
@@ -112,6 +111,7 @@ export async function initNotifications(userId?: string) {
       if (getNotificationPrefs().remindersEnabled) await scheduleDailyReminders();
 
     } catch (err) {
+      isInitialized = false;
       console.error('[Notifications] Failed to initialize native notifications:', err);
     }
   } else {
@@ -172,6 +172,13 @@ export async function syncReminderPreferences() {
  */
 export async function showNativeNotification(payload: NotificationPayload): Promise<boolean> {
   if (!getNotificationPrefs().remindersEnabled) return false;
+  const key = typeof payload.data?.notification_id === 'string' ? payload.data.notification_id : '';
+  if (key) {
+    const previous = displayedNotifications.get(key);
+    if (previous && Date.now() - previous < 60000) return true;
+    displayedNotifications.set(key, Date.now());
+    if (displayedNotifications.size > 200) displayedNotifications.delete(displayedNotifications.keys().next().value!);
+  }
   const isNative = Capacitor.isNativePlatform();
   const id = payload.id || Math.floor(Math.random() * 1000000);
 

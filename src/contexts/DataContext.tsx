@@ -271,7 +271,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
               showNativeNotification({
                 title: notif.title || 'New GetWebApp Alert',
                 body: notif.body || '',
-                data: { link_url: notif.link_url },
+                data: { link_url: notif.link_url, notification_id: notif.id },
               });
               toast({
                 title: notif.title,

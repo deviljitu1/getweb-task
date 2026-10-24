@@ -27,12 +27,21 @@ import { cn } from '@/lib/utils';
 import ReactMarkdown from 'react-markdown';
 import { toast } from '@/hooks/use-toast';
 import LocalAISettings from '@/components/LocalAISettings';
+import { useVisualViewport } from '@/hooks/use-visual-viewport';
 
 interface Message {
   role: 'user' | 'assistant' | 'system';
   content: string;
   toolCallInfo?: string;
 }
+interface VoiceRecognition {
+  continuous: boolean; interimResults: boolean; lang: string;
+  onresult: ((event: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null;
+  onend: (() => void) | null;
+  onerror: ((event: { error: string }) => void) | null;
+  start: () => void; stop: () => void; abort: () => void;
+}
+type VoiceWindow = Window & { SpeechRecognition?: new () => VoiceRecognition; webkitSpeechRecognition?: new () => VoiceRecognition };
 
 const ASSISTANT_CONFIG = {
   name: 'Milo',
@@ -41,7 +50,8 @@ const ASSISTANT_CONFIG = {
 };
 const cleanAssistantText = (value: string) => value.replace(/[\p{Extended_Pictographic}\uFE0F\u200D]/gu, '').replace(/\bemployees\b/gi, 'team members').replace(/\bemployee\b/gi, 'team member').trim();
 
-export const AIAssistantWidget: React.FC<{ initialOpen?: boolean }> = ({ initialOpen = false }) => {
+export const AIAssistantWidget: React.FC<{ initialOpen?: boolean; launcherClassName?: string; avoidComposer?: boolean }> = ({ initialOpen = false, launcherClassName, avoidComposer = false }) => {
+  const viewport = useVisualViewport();
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const {
@@ -59,6 +69,20 @@ export const AIAssistantWidget: React.FC<{ initialOpen?: boolean }> = ({ initial
   } = useData();
 
   const [isOpen, setIsOpen] = useState(initialOpen);
+  const [closing, setClosing] = useState(false);
+  const launcherRef = useRef<HTMLButtonElement>(null);
+  const normalDock = window.innerWidth >= 768 ? (avoidComposer ? 112 : 24) : avoidComposer ? 160 : window.innerWidth >= 640 ? 24 : 80;
+  const dock = Math.min(normalDock, Math.max(16, viewport.height - 260));
+  const launcherBottom = Math.max(0, window.innerHeight - viewport.height - viewport.top) + dock;
+  const closeAssistant = () => {
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) { setIsOpen(false); launcherRef.current?.focus(); }
+    else setClosing(true);
+  };
+  useEffect(() => {
+    if (!closing) return;
+    const timeout = setTimeout(() => { setIsOpen(false); setClosing(false); launcherRef.current?.focus(); }, 180);
+    return () => clearTimeout(timeout);
+  }, [closing]);
   const [isExpanded, setIsExpanded] = useState(false);
 
   const initialGreeting = useMemo(() => {
@@ -80,7 +104,7 @@ export const AIAssistantWidget: React.FC<{ initialOpen?: boolean }> = ({ initial
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  const recognitionRef = useRef<any>(null);
+  const recognitionRef = useRef<VoiceRecognition | null>(null);
   const sendVoiceRef = useRef<(text: string) => void>(() => undefined);
 
   const currentConfig = ASSISTANT_CONFIG;
@@ -110,7 +134,7 @@ export const AIAssistantWidget: React.FC<{ initialOpen?: boolean }> = ({ initial
       setTimeout(() => inputRef.current?.focus(), 150);
     } else {
       stopSpeaking();
-      if (isListening && recognitionRef.current) {
+      if (recognitionRef.current) {
         recognitionRef.current.stop();
         setIsListening(false);
       }
@@ -118,11 +142,11 @@ export const AIAssistantWidget: React.FC<{ initialOpen?: boolean }> = ({ initial
   }, [isOpen]);
 
   // Set up Speech Recognition (Web Speech API)
-  const isSpeechSupported = typeof window !== 'undefined' && Boolean((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition);
+  const isSpeechSupported = typeof window !== 'undefined' && Boolean((window as VoiceWindow).SpeechRecognition || (window as VoiceWindow).webkitSpeechRecognition);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    const SpeechClass = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    const SpeechClass = (window as VoiceWindow).SpeechRecognition || (window as VoiceWindow).webkitSpeechRecognition;
     if (!SpeechClass) return;
 
     try {
@@ -131,7 +155,7 @@ export const AIAssistantWidget: React.FC<{ initialOpen?: boolean }> = ({ initial
       rec.interimResults = false;
       rec.lang = 'en-US';
 
-      rec.onresult = (event: any) => {
+      rec.onresult = (event) => {
         const transcript = event.results?.[0]?.[0]?.transcript;
         if (transcript) {
           sendVoiceRef.current(transcript);
@@ -142,7 +166,7 @@ export const AIAssistantWidget: React.FC<{ initialOpen?: boolean }> = ({ initial
         setIsListening(false);
       };
 
-      rec.onerror = (event: any) => {
+      rec.onerror = (event) => {
         console.warn('Speech recognition error:', event.error);
         setIsListening(false);
         if (event.error === 'not-allowed') {
@@ -163,7 +187,7 @@ export const AIAssistantWidget: React.FC<{ initialOpen?: boolean }> = ({ initial
       if (recognitionRef.current) {
         try {
           recognitionRef.current.abort();
-        } catch {}
+        } catch { /* Recognition may already be stopped. */ }
       }
     };
   }, []);
@@ -235,9 +259,9 @@ export const AIAssistantWidget: React.FC<{ initialOpen?: boolean }> = ({ initial
       const text = cleanAssistantText(result.text);
       setMessages(prev => [...prev, { role: 'assistant', content: text }]);
       if (voiceAudioEnabled) speakText(text);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('AI assistant error:', err);
-      const errMsg = err.message || 'Network issue reaching AI service';
+      const errMsg = err instanceof Error ? err.message : 'Network issue reaching AI service';
       toast({
         title: `${currentConfig.name} request failed`,
         description: errMsg,
@@ -285,29 +309,37 @@ export const AIAssistantWidget: React.FC<{ initialOpen?: boolean }> = ({ initial
   return (
     <>
       {/* Single Unified Floating Launcher */}
-      {!isOpen && (
         <button
-          onClick={() => setIsOpen(true)}
-          className="fixed bottom-[calc(5rem+env(safe-area-inset-bottom))] right-4 sm:bottom-6 sm:right-6 z-50 h-12 w-12 rounded-full bg-white text-primary shadow-2xl shadow-primary/40 hover:scale-105 active:scale-95 transition-all flex items-center justify-center group ring-2 ring-primary/20"
-          aria-label="Open AI Assistant"
-          title="Open Milo"
+          ref={launcherRef}
+          onClick={() => isOpen ? closeAssistant() : setIsOpen(true)}
+          style={{ bottom: launcherBottom, zIndex: 60 }}
+          className={cn(launcherClassName || 'fixed right-4 sm:right-6 h-12 w-12 rounded-full bg-white text-primary shadow-2xl flex items-center justify-center', 'transition-transform duration-150 active:scale-95 ring-2 ring-primary/20', isOpen && '!bg-primary !text-primary-foreground')}
+          aria-label={isOpen ? 'Close Milo' : 'Open AI Assistant'}
+          aria-expanded={isOpen}
+          aria-controls="milo-panel"
+          title={isOpen ? 'Close Milo' : 'Open Milo'}
         >
-          <img src="/images/assistant-cat.png" alt="" className="h-full w-full rounded-full object-contain" width="48" height="48" />
+          {isOpen ? <X className="h-5 w-5" /> : <img src="/images/assistant-cat.png" alt="" className="h-full w-full rounded-full object-contain" width="48" height="48" />}
         </button>
-      )}
 
       {/* Unified AI Chatbot Window */}
       {isOpen && (
         <div
+          id="milo-panel"
+          role="region"
+          aria-label="Milo assistant"
+          onKeyDown={event => { if (event.key === 'Escape' && !event.defaultPrevented) closeAssistant(); }}
+          style={{ maxHeight: Math.max(120, viewport.height - dock - 84), bottom: launcherBottom + 64 }}
           className={cn(
-            'fixed bottom-[calc(5rem+env(safe-area-inset-bottom))] right-4 sm:bottom-6 sm:right-6 bg-background border border-border/60 shadow-2xl rounded-2xl flex flex-col z-50 overflow-hidden transition-all duration-300',
+            'milo-panel fixed right-4 sm:right-6 bg-background border border-border/60 shadow-2xl rounded-2xl flex flex-col z-50 overflow-hidden',
+            closing && 'milo-panel-closing',
             isExpanded
               ? 'w-[calc(100vw-2rem)] h-[min(650px,calc(100dvh-9rem))] sm:w-[560px] sm:h-[720px]'
               : 'w-[calc(100vw-2rem)] h-[min(520px,calc(100dvh-10rem))] sm:w-[400px] sm:h-[560px]'
           )}
         >
           {/* Header */}
-          <div className="p-3 sm:p-3.5 bg-gradient-to-r from-primary/10 via-indigo-500/10 to-purple-500/10 border-b border-border/60 flex items-center justify-between gap-2">
+          <div className="shrink-0 p-3 sm:p-3.5 bg-gradient-to-r from-primary/10 via-indigo-500/10 to-purple-500/10 border-b border-border/60 flex items-center justify-between gap-2">
             <div className="flex items-center gap-2.5 min-w-0">
               <div className="h-9 w-9 shrink-0 overflow-hidden rounded-full bg-white">
                 <img src="/images/assistant-cat.png" alt="" className="h-full w-full object-contain" width="36" height="36" />
@@ -349,21 +381,11 @@ export const AIAssistantWidget: React.FC<{ initialOpen?: boolean }> = ({ initial
                 {isExpanded ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
               </Button>
 
-              {/* Close */}
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-8 w-8 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
-                onClick={() => setIsOpen(false)}
-                title="Close Assistant"
-              >
-                <X className="h-4 w-4" />
-              </Button>
             </div>
           </div>
 
           {/* Messages Area */}
-          <ScrollArea className="flex-1 p-3.5 bg-slate-50/40 dark:bg-slate-950/20">
+          <ScrollArea className="min-h-0 flex-1 p-3.5 bg-slate-50/40 dark:bg-slate-950/20">
             <div className="space-y-3.5">
               {messages.map((m, i) => (
                 <div
@@ -375,7 +397,7 @@ export const AIAssistantWidget: React.FC<{ initialOpen?: boolean }> = ({ initial
                 >
                   <div
                     className={cn(
-                      'max-w-[88%] rounded-2xl px-3.5 py-2.5 text-sm shadow-xs',
+                      'min-w-0 max-w-[88%] [overflow-wrap:anywhere] rounded-2xl px-3.5 py-2.5 text-sm shadow-xs',
                       m.role === 'user'
                         ? 'bg-primary text-primary-foreground rounded-br-xs'
                         : 'bg-card text-card-foreground border border-border/70 rounded-bl-xs'
@@ -415,7 +437,7 @@ export const AIAssistantWidget: React.FC<{ initialOpen?: boolean }> = ({ initial
           </ScrollArea>
 
           {/* Input & Voice Controls */}
-          <form onSubmit={(e) => handleSend(e)} className="p-2.5 sm:p-3 border-t bg-background flex items-center gap-2">
+          <form onSubmit={(e) => handleSend(e)} className="shrink-0 p-2.5 sm:p-3 border-t bg-background flex items-center gap-2">
             {/* Speech-To-Text Mic Button */}
             {isSpeechSupported && (
               <Button
@@ -444,7 +466,7 @@ export const AIAssistantWidget: React.FC<{ initialOpen?: boolean }> = ({ initial
               placeholder={isListening ? 'Listening to your voice...' : currentConfig.placeholder}
               disabled={isLoading}
               maxLength={600}
-              className="rounded-full bg-muted/40 border-border/60 text-xs sm:text-sm h-9 px-4 focus-visible:ring-1 focus-visible:ring-primary"
+              className="min-w-0 rounded-full bg-muted/40 border-border/60 text-base sm:text-sm h-10 px-3 focus-visible:ring-1 focus-visible:ring-primary"
             />
 
             <Button

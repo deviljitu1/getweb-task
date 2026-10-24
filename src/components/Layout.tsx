@@ -2,7 +2,7 @@ import { Outlet, NavLink as RouterNavLink, useNavigate, useLocation } from 'reac
 import { Suspense } from 'react';
 import { preloadRoute } from '@/lib/route-preload';
 import { useAuth } from '@/contexts/AuthContext';
-import { LayoutDashboard, Users, LogOut, Clock, ChevronRight, Activity, Handshake, Wrench, FileText, Wallet, UserCog } from 'lucide-react';
+import { LayoutDashboard, Users, LogOut, Clock, ChevronRight, Activity, Handshake, Wrench, UserCog } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -12,11 +12,16 @@ import AssistantLauncher from '@/components/AssistantLauncher';
 import NotificationSettings from '@/components/NotificationSettings';
 import OfflineBanner from '@/components/OfflineBanner';
 import WorkspaceLoader from '@/components/WorkspaceLoader';
+import { useVisualViewport } from '@/hooks/use-visual-viewport';
+import { useCall } from '@/components/CallModal';
 
 const Layout = () => {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
+  const viewport = useVisualViewport();
+  const { isCallActive } = useCall();
+  const isChat = ['/members', '/chat'].includes(location.pathname);
   const handleLogout = () => {
     logout();
     navigate('/login');
@@ -29,18 +34,17 @@ const Layout = () => {
     ...(user?.role === 'admin' ? [
       { to: '/directory', icon: UserCog, label: 'Manage Team' },
       { to: '/crm', icon: Handshake, label: 'Agency CRM' },
-      { to: '/tools/invoices', icon: FileText, label: 'Invoices' },
-      { to: '/tools/finance', icon: Wallet, label: 'Finance' },
     ] : []),
     { to: '/tools', icon: Wrench, label: 'Tools & Resources' },
   ];
   const mobileItems = [navItems[0], navItems[1], null,
     navItems.find(item => item.to === (user?.role === 'admin' ? '/crm' : '/team-status'))!,
     navItems.find(item => item.to === '/tools')!];
+  const activeNavPath = navItems.filter(item => location.pathname === item.to || (item.to !== '/' && location.pathname.startsWith(item.to + '/'))).sort((a, b) => b.to.length - a.to.length)[0]?.to;
 
   const SidebarContent = () => (
-    <div className="flex flex-col h-full bg-sidebar-background/95 backdrop-blur-xl border-r border-sidebar-border shadow-lg">
-      <div className="p-6">
+    <div className="flex min-h-0 flex-col h-full bg-sidebar-background/95 backdrop-blur-xl border-r border-sidebar-border shadow-lg">
+      <div className="shrink-0 p-6">
         <div className="flex items-center gap-3 px-2">
           <div className="p-2 bg-primary/10 rounded-lg">
             <Clock className="h-6 w-6 text-primary" />
@@ -49,11 +53,11 @@ const Layout = () => {
         </div>
       </div>
 
-      <div className="px-4 py-2">
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-2">
         <p className="px-4 text-xs font-semibold text-sidebar-foreground/40 uppercase tracking-wider mb-2">Menu</p>
         <nav className="space-y-1">
           {navItems.map(item => {
-            const isActive = item.to === '/' ? location.pathname === '/' : location.pathname.startsWith(item.to);
+            const isActive = activeNavPath === item.to;
             return (
               <RouterNavLink
                 key={item.to}
@@ -78,7 +82,7 @@ const Layout = () => {
         </nav>
       </div>
 
-      <div className="mt-auto p-4 m-2">
+      <div className="shrink-0 p-4 m-2">
         <div className="bg-sidebar-accent/50 rounded-2xl p-4 border border-sidebar-border/50">
           <div className="flex items-center gap-3 mb-4">
             <Avatar className="h-10 w-10 border-2 border-background shadow-sm">
@@ -108,7 +112,7 @@ const Layout = () => {
   );
 
   return (
-    <div className="flex h-dvh min-h-0 w-full overflow-hidden bg-background">
+    <div className="flex h-dvh min-h-0 w-full overflow-hidden bg-background" style={{ height: viewport.height }}>
       {/* Desktop sidebar */}
       <aside className="hidden md:flex w-72 flex-col shrink-0 z-20">
         <SidebarContent />
@@ -147,14 +151,12 @@ const Layout = () => {
         </header>
 
 
-        <main className="flex-1 overflow-auto bg-muted/20 relative">
+        <div className="hidden shrink-0 items-center justify-end border-b bg-card/80 px-6 py-1 md:flex"><NotificationSettings /></div>
+        <main className={cn('min-h-0 flex-1 bg-muted/20 relative', isChat ? 'flex overflow-hidden' : 'overflow-auto')}>
           {/* Desktop floating settings */}
-          <div className="hidden md:flex absolute top-4 right-6 z-20">
-            <NotificationSettings />
-          </div>
           {/* Subtle background pattern for main content */}
           <div className="absolute inset-0 bg-[linear-gradient(to_right,#80808012_1px,transparent_1px),linear-gradient(to_bottom,#80808012_1px,transparent_1px)] bg-[size:24px_24px] pointer-events-none" />
-          <div className="relative px-3 pt-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:px-4 sm:pt-6 md:p-8 max-w-7xl mx-auto w-full min-w-0 overflow-x-hidden">
+          <div className={cn('relative max-w-7xl mx-auto w-full min-w-0', isChat ? 'flex min-h-0 flex-1 flex-col p-2 md:p-4' : 'px-3 pt-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:px-4 sm:pt-6 md:p-8 overflow-x-hidden')}>
             <Suspense fallback={<WorkspaceLoader compact />}><Outlet /></Suspense>
           </div>
         </main>
@@ -182,7 +184,7 @@ const Layout = () => {
         </nav>
       </div>
       {/* Unified AI Assistant for all users */}
-      <AssistantLauncher />
+      <div hidden={isCallActive}><AssistantLauncher avoidComposer={isChat} /></div>
     </div>
   );
 };

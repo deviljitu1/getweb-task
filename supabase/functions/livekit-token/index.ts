@@ -16,6 +16,23 @@ Deno.serve(async req => {
     const { data: profile, error: profileError } = await client.from('profiles').select('name,is_active').eq('user_id', auth.user.id).single();
     if (profileError || !profile?.is_active) return respond({ error: 'Active team account required' }, 403);
     const body = await req.json();
+    const peerId = body.peer_id;
+    if (peerId !== undefined) {
+      if (typeof peerId !== 'string' || !/^[0-9a-f-]{36}$/i.test(peerId) || peerId === auth.user.id || body.group_id) return respond({ error: 'Select a valid teammate' }, 400);
+      const { data: peer, error: peerError } = await client.from('profiles').select('is_active').eq('user_id', peerId).maybeSingle();
+      if (peerError || !peer?.is_active) return respond({ error: 'This team member is unavailable for calls' }, 403);
+    }
+    if (body.action === 'signal') {
+      if (!peerId || !['call-invite', 'call-accepted', 'call-declined', 'call-ended', 'ring-alert'].includes(body.signal) || typeof body.call_id !== 'string' || !/^[0-9a-f-]{36}$/i.test(body.call_id)) return respond({ error: 'Invalid call signal' }, 400);
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
+      await admin.realtime.setAuth(Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
+      const channel = admin.channel(`team-calls:user:${peerId}`, { config: { private: true } });
+      try {
+        const delivered = await channel.httpSend('call-signal', { type: body.signal, callId: body.call_id, callerId: auth.user.id, callerName: profile.name, recipientId: peerId, sentAt: Date.now() });
+        if (!delivered.success) return respond({ error: 'The call invitation could not be delivered. Try again.' }, 503);
+      } finally { await admin.removeChannel(channel); }
+      return respond({ success: true });
+    }
     const groupId = body.group_id || null;
     if (groupId && (typeof groupId !== 'string' || !/^[0-9a-f-]{36}$/i.test(groupId))) return respond({ error: 'Invalid group' }, 400);
     if (body.action === 'update_group') {
@@ -58,8 +75,9 @@ Deno.serve(async req => {
     if (!url || !key || !secret) return respond({ configured: false, error: 'Group calls are waiting for the workspace administrator to connect LiveKit.' });
     if (!url.startsWith('wss://')) return respond({ error: 'The call service URL is invalid' }, 503);
     const token = new AccessToken(key, secret, { identity: auth.user.id, name: profile.name, ttl: '10m' });
-    token.addGrant({ roomJoin: true, room: `getweb-${groupId || 'workspace'}`, canSubscribe: true, canPublish: true, canPublishSources: [TrackSource.MICROPHONE], canPublishData: false, canUpdateOwnMetadata: false });
-    return respond({ configured: true, url, token: await token.toJwt() });
+    const room = peerId ? `getweb-dm-${[auth.user.id, peerId].sort().join('-')}` : `getweb-${groupId || 'workspace'}`;
+    token.addGrant({ roomJoin: true, room, canSubscribe: true, canPublish: true, canPublishSources: [TrackSource.MICROPHONE], canPublishData: false, canUpdateOwnMetadata: false });
+    return respond({ configured: true, url, room, token: await token.toJwt() });
   } catch {
     return respond({ error: 'The group call could not be authorised. Please try again.' }, 500);
   }

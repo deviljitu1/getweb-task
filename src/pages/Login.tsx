@@ -69,9 +69,10 @@ const Login = () => {
         }
 
         // Trigger native mobile/browser prompt to save credentials (Google Password Manager / Keychain)
-        if (typeof window !== 'undefined' && 'credentials' in navigator && (window as any).PasswordCredential) {
+        const PasswordCredentialClass = (window as Window & { PasswordCredential?: new (options: { id: string; password: string; name: string }) => Credential }).PasswordCredential;
+        if (rememberMe && 'credentials' in navigator && PasswordCredentialClass) {
           try {
-            const cred = new (window as any).PasswordCredential({
+            const cred = new PasswordCredentialClass({
               id: trimmedId,
               password: password,
               name: trimmedId,
@@ -127,11 +128,11 @@ const Login = () => {
                 <img src="/images/getweb-loader.gif" alt="GetWebApp" className="h-14 w-14 object-contain rounded-xl" />
               </div>
             </div>
-            <h2 className="text-2xl sm:text-3xl font-bold tracking-tight leading-snug">
-              Welcome back<br />to GetWebApp
+            <h2 className="whitespace-nowrap text-xl min-[360px]:text-2xl sm:text-3xl font-bold tracking-tight leading-snug">
+              Hey, welcome back.
             </h2>
             <p className="text-xs sm:text-sm text-muted-foreground leading-relaxed">
-              Sign in to your account<br />to continue your work
+              Let’s make today count.
             </p>
           </div>
 

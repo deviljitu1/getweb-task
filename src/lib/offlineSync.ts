@@ -314,7 +314,10 @@ export async function processOfflineQueue(
       }
 
       if (success) {
-        queue.shift(); // Remove processed action
+        // Re-read after the request: another action may have been queued while
+        // this one was in flight. Remove only the acknowledged action.
+        const stored: OfflineAction[] = JSON.parse(localStorage.getItem(queueKey) || '[]');
+        queue = stored.filter(item => item.id !== action.id);
         localStorage.setItem(queueKey, JSON.stringify(queue));
         synced++;
         notifyQueueChange();

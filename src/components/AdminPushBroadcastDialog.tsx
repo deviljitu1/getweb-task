@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useData } from '@/contexts/DataContext';
 import { supabase } from '@/integrations/supabase/client';
@@ -24,6 +24,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Send, BellRing, Users } from 'lucide-react';
+import InfoHint from '@/components/InfoHint';
 
 export const AdminPushBroadcastDialog: React.FC<{ trigger?: React.ReactNode }> = ({ trigger }) => {
   const { user } = useAuth();
@@ -34,11 +35,21 @@ export const AdminPushBroadcastDialog: React.FC<{ trigger?: React.ReactNode }> =
   const [body, setBody] = useState('');
   const [linkUrl, setLinkUrl] = useState('');
   const [loading, setLoading] = useState(false);
+  const [deliveryStatus, setDeliveryStatus] = useState('Checking mobile push…');
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    void supabase.functions.invoke('send-push-notification', { body: { action: 'status' } }).then(({ data, error }) => {
+      if (!cancelled) setDeliveryStatus(error || data?.error ? 'Mobile push status could not be checked.' : !data?.configured ? 'Mobile push needs Firebase configuration. In-app announcements still work.' : `${data.registeredDevices || 0} registered mobile devices. Devices must enable notifications in the installed app. Browser alerts need the app open.`);
+    });
+    return () => { cancelled = true; };
+  }, [open]);
 
   const activeEmployees = members.filter((m) => m.is_active);
 
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (loading) return;
     if (!title.trim() || !body.trim() || !user) {
       toast({ title: 'Please fill in title and message', variant: 'destructive' });
       return;
@@ -52,6 +63,7 @@ export const AdminPushBroadcastDialog: React.FC<{ trigger?: React.ReactNode }> =
       } else {
         recipientIds = [targetUser];
       }
+      if (!recipientIds.length) throw new Error('No active recipients. Add or enable a team account first.');
 
       const { data, error } = await supabase.functions.invoke('send-push-notification', {
         body: {
@@ -61,14 +73,18 @@ export const AdminPushBroadcastDialog: React.FC<{ trigger?: React.ReactNode }> =
           linkUrl: linkUrl.trim() || null,
         },
       });
-      if (error) throw error;
+      if (error) {
+        let detail = data?.error;
+        try { detail ||= (await error.context?.clone().json())?.error; } catch { /* Network errors may have no response. */ }
+        throw new Error(detail || 'The notification service is unavailable. Try again.');
+      }
       if (data?.error) throw new Error(data.error);
 
       toast({
-        title: data?.delivered ? 'Push Notification Sent! 🚀' : 'In-app Notification Sent',
+        title: data?.delivered ? 'Notification sent' : 'Announcement saved in app',
         description: data?.warning
           ? `${recipientIds.length} in-app notification${recipientIds.length === 1 ? '' : 's'} created. ${data.warning}.`
-          : `${data?.delivered ?? 0} device push${data?.delivered === 1 ? '' : 'es'} delivered; ${recipientIds.length} in-app notification${recipientIds.length === 1 ? '' : 's'} created.`,
+          : `${data?.delivered ?? 0} device push${data?.delivered === 1 ? '' : 'es'} accepted by Firebase; ${data?.inAppCreated ?? recipientIds.length} in-app notifications created.`,
       });
 
       setTitle('');
@@ -76,11 +92,11 @@ export const AdminPushBroadcastDialog: React.FC<{ trigger?: React.ReactNode }> =
       setLinkUrl('');
       setTargetUser('all');
       setOpen(false);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Error sending push notification:', err);
       toast({
         title: 'Failed to send notification',
-        description: err.message || 'Database error occurred.',
+        description: err instanceof Error ? err.message : 'The notification could not be sent.',
         variant: 'destructive',
       });
     } finally {
@@ -107,10 +123,8 @@ export const AdminPushBroadcastDialog: React.FC<{ trigger?: React.ReactNode }> =
               <BellRing className="h-5 w-5 text-primary" />
             </div>
             <div>
-              <DialogTitle>Send Mobile Push Notification</DialogTitle>
-              <DialogDescription>
-                Broadcast an instant push alert to your team's mobile devices and browsers.
-              </DialogDescription>
+              <div className="flex items-center gap-1"><DialogTitle>Team notification</DialogTitle><InfoHint title="Notification delivery">{deliveryStatus}</InfoHint></div>
+              <DialogDescription className="sr-only">Send an in-app announcement and a push to registered mobile devices.</DialogDescription>
             </div>
           </div>
         </DialogHeader>
@@ -131,7 +145,7 @@ export const AdminPushBroadcastDialog: React.FC<{ trigger?: React.ReactNode }> =
                 </SelectItem>
                 {activeEmployees.map((member) => (
                   <SelectItem key={member.user_id} value={member.user_id}>
-                    {member.name} ({member.employee_type})
+                    {member.name}{member.user_id === user?.userId ? ' (You)' : ''}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -142,7 +156,8 @@ export const AdminPushBroadcastDialog: React.FC<{ trigger?: React.ReactNode }> =
             <Label htmlFor="title">Notification Title *</Label>
             <Input
               id="title"
-              placeholder="e.g. 🚨 Urgent: Standup Meeting in 10 mins"
+              placeholder="Standup in 10 minutes"
+              maxLength={120}
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               required
@@ -155,6 +170,7 @@ export const AdminPushBroadcastDialog: React.FC<{ trigger?: React.ReactNode }> =
               id="body"
               placeholder="Write the notification message here..."
               rows={3}
+              maxLength={1000}
               value={body}
               onChange={(e) => setBody(e.target.value)}
               required
@@ -175,7 +191,7 @@ export const AdminPushBroadcastDialog: React.FC<{ trigger?: React.ReactNode }> =
             <Button type="button" variant="outline" onClick={() => setOpen(false)} className="w-full sm:w-auto">
               Cancel
             </Button>
-            <Button type="submit" disabled={loading} className="w-full gap-2 sm:w-auto">
+            <Button type="submit" disabled={loading || !activeEmployees.length} className="w-full gap-2 sm:w-auto">
               <Send className="h-4 w-4" />
               {loading ? 'Sending...' : 'Send Push Alert'}
             </Button>

@@ -61,11 +61,14 @@ const Chat = () => {
     const [groupUnread, setGroupUnread] = useState<Record<string, number>>({});
     const [historyLimit, setHistoryLimit] = useState(100);
     const [sending, setSending] = useState(false);
+    const [loading, setLoading] = useState(true);
+    const [loadError, setLoadError] = useState('');
     const requestRef = useRef(0);
     const latestRefresh = useRef<() => void>(() => undefined);
     const liveConnected = useRef(false);
     const [selectedUser, setSelectedUser] = useState<string | null>(null); // null = Group Chat
     const scrollRef = useRef<HTMLDivElement>(null);
+    const messagesViewport = useRef<HTMLDivElement>(null);
     const [searchQuery, setSearchQuery] = useState('');
     const [editingMessage, setEditingMessage] = useState<Message | null>(null);
     const [showEmojiPicker, setShowEmojiPicker] = useState(false);
@@ -76,6 +79,25 @@ const Chat = () => {
     const [isAtBottom, setIsAtBottom] = useState(true);
     const [attachmentUrls, setAttachmentUrls] = useState<Record<string, string>>({});
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const drafts = useRef(new Map<string, string>());
+    const conversationKey = selectedGroup ? `group:${selectedGroup}` : selectedUser ? `dm:${selectedUser}` : 'workspace';
+    const currentConversation = useRef(conversationKey);
+    currentConversation.current = conversationKey;
+    const atBottomRef = useRef(isAtBottom);
+    atBottomRef.current = isAtBottom;
+    useEffect(() => {
+        setNewMessage(drafts.current.get(conversationKey) || '');
+        setEditingMessage(null); setSelectedFile(null); setShowEmojiPicker(false);
+    }, [conversationKey]);
+    useEffect(() => {
+        if (!messagesViewport.current || typeof ResizeObserver === 'undefined') return;
+        const observer = new ResizeObserver(() => {
+            const element = messagesViewport.current;
+            if (element && atBottomRef.current) element.scrollTop = element.scrollHeight;
+        });
+        observer.observe(messagesViewport.current);
+        return () => observer.disconnect();
+    }, []);
 
     const conversationVisible = !isMobile || showMobileChat;
     const currentGroup = groupsQuery.data?.groups.find(group => group.id === selectedGroup);
@@ -100,6 +122,7 @@ const Chat = () => {
     const fetchMessages = async () => {
         if (!user) return;
         const request = ++requestRef.current;
+        setLoading(true);
 
         let query = supabase
             .from('messages')
@@ -131,9 +154,11 @@ const Chat = () => {
 
         const { data, error } = await query;
         if (request !== requestRef.current) return;
+        setLoading(false);
         if (error) {
-            console.error('Error fetching messages:', error);
+            setLoadError('Messages could not load. Check your connection and retry.');
         } else {
+            setLoadError('');
             setMessages((data as unknown as Message[] || []).slice().reverse());
 
             // For Group Chat, update last read time based on LATEST message
@@ -161,7 +186,7 @@ const Chat = () => {
 
         const counts: Record<string, number> = {};
         if (data) {
-            data.forEach((msg: any) => {
+            data.forEach((msg) => {
                 counts[msg.sender_id] = (counts[msg.sender_id] || 0) + 1;
             });
         }
@@ -213,15 +238,8 @@ const Chat = () => {
     const lastMessageId = messages.length > 0 ? messages[messages.length - 1].id : null;
 
     const scrollToBottom = (behavior: 'smooth' | 'auto' = 'smooth') => {
-        if (scrollRef.current) {
-            scrollRef.current.scrollIntoView({ behavior, block: 'end' });
-            // Fallback for some browsers where smooth scrolling gets interrupted
-            if (behavior === 'smooth') {
-                setTimeout(() => {
-                    scrollRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
-                }, 300);
-            }
-        }
+        const viewport = messagesViewport.current;
+        viewport?.scrollTo({ top: viewport.scrollHeight, behavior });
     };
 
     // Force scroll to bottom when switching chats
@@ -277,6 +295,7 @@ const Chat = () => {
     const handleSendMessage = async (e: React.FormEvent) => {
         e.preventDefault();
         if ((!newMessage.trim() && !selectedFile) || !user || sending) return;
+        const sentConversation = conversationKey;
         setSending(true);
 
         try {
@@ -311,7 +330,7 @@ const Chat = () => {
                     .eq('id', editingMessage.id);
 
                 if (error) throw error;
-                setEditingMessage(null);
+                if (currentConversation.current === sentConversation) setEditingMessage(null);
             } else {
                 // Send new message
                 const { error } = await supabase.from('messages').insert({
@@ -327,6 +346,8 @@ const Chat = () => {
                 if (error) throw error;
             }
 
+            drafts.current.delete(sentConversation);
+            if (currentConversation.current !== sentConversation) return;
             setNewMessage('');
             setSelectedFile(null);
             setShowEmojiPicker(false);
@@ -393,11 +414,11 @@ const Chat = () => {
     };
 
     const filteredMembers = members
-        .filter(emp => emp.user_id !== user?.userId) // Don't chat with self
-        .filter(emp => emp.name.toLowerCase().includes(searchQuery.toLowerCase()));
+        .filter(emp => emp.name.toLowerCase().includes(searchQuery.toLowerCase()) || (emp.user_id === user?.userId && 'you'.includes(searchQuery.toLowerCase())))
+        .sort((a, b) => Number(b.user_id === user?.userId) - Number(a.user_id === user?.userId));
 
     return (
-        <div className="flex h-[calc(100dvh-10rem)] min-h-[300px] gap-0 overflow-hidden rounded-xl border bg-card md:h-[calc(100dvh-5rem)]">
+        <div className="flex min-h-0 min-w-0 flex-1 gap-0 overflow-hidden rounded-xl border bg-card">
             <Seo title="Team Communication — GetWebApp" description="Message teammates, share files, and keep project conversations in one place inside GetWebApp." path="/members" noindex />
             <h1 className="sr-only">Team Communication</h1>
             {addingMember && <Suspense fallback={null}><Members dialogOnly onClose={() => setAddingMember(false)} /></Suspense>}
@@ -408,7 +429,7 @@ const Chat = () => {
                 "w-full md:w-80 flex-col border-r bg-card overflow-hidden shrink-0",
                 showMobileChat ? "hidden md:flex" : "flex"
             )}>
-                <div className="p-4 border-b border-border/50 bg-muted/20">
+                <div className="shrink-0 p-3 border-b border-border/50 bg-muted/20">
                     <h2 className="text-base font-semibold mb-3 flex items-center gap-2">
                         <MessageSquare className="h-4 w-4 text-primary" /> Team
                         {user?.role === 'admin' && (
@@ -449,7 +470,7 @@ const Chat = () => {
                     </div>
                 </div>
 
-                <ScrollArea className="flex-1">
+                <ScrollArea className="min-h-0 flex-1">
                     <div className="p-3 space-y-2">
                         {/* Group Chat Item */}
                         <button
@@ -492,11 +513,11 @@ const Chat = () => {
 
             {/* Main Chat Area */}
             <div className={cn(
-                "min-w-0 flex-1 flex-col overflow-hidden relative",
+                "min-h-0 min-w-0 flex-1 flex-col overflow-hidden relative",
                 showMobileChat ? "flex" : "hidden md:flex"
             )}>
                 {/* Chat Header */}
-                <div className="px-3 py-3 border-b border-border/50 bg-muted/20 flex items-center gap-2">
+                <div className="shrink-0 px-2 py-2 border-b border-border/50 bg-muted/20 flex items-center gap-2">
                     <Button
                         variant="ghost"
                         size="icon"
@@ -547,8 +568,8 @@ const Chat = () => {
                             <div className="h-10 w-10 rounded-full bg-primary/20 flex items-center justify-center text-primary shadow-sm border border-primary/10">
                                 <Users className="h-5 w-5" />
                             </div>
-                            <div className="flex-1">
-                                <h3 className="font-bold text-lg leading-none">Team Group Chat</h3>
+                            <div className="min-w-0 flex-1">
+                                <h3 className="truncate font-semibold text-sm leading-tight">{currentGroup?.name || 'Team Group Chat'}</h3>
                                 <p className="text-xs text-muted-foreground mt-1 cursor-pointer hover:underline" onClick={() => document.getElementById('view-members-trigger')?.click()}>
                                     {visibleMembers.length} members
                                 </p>
@@ -574,7 +595,7 @@ const Chat = () => {
                                                         <AvatarFallback>{emp.name.charAt(0)}</AvatarFallback>
                                                     </Avatar>
                                                     <div>
-                                                        <p className="font-medium text-sm">{emp.name}</p>
+                                                        <p className="font-medium text-sm">{emp.user_id === user?.userId ? `${emp.name} (You)` : emp.name}</p>
                                                         <p className="text-xs text-muted-foreground capitalize">{emp.employee_type}</p>
                                                     </div>
                                                     <PresenceBadge userId={emp.user_id} enabled={emp.is_active} />
@@ -589,8 +610,13 @@ const Chat = () => {
                 </div>
 
                 {/* Messages Area */}
-                <ScrollArea 
-                    className="min-h-0 flex-1 p-3 md:p-5 bg-muted/30"
+                {loadError && <div role="alert" className="flex shrink-0 items-center justify-between gap-2 border-b bg-destructive/5 px-3 py-2 text-xs"><span>{loadError}</span><Button size="sm" variant="ghost" onClick={() => void fetchMessages()}>Retry</Button></div>}
+                <div
+                    ref={messagesViewport}
+                    role="log"
+                    aria-label="Conversation messages"
+                    aria-busy={loading}
+                    className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain p-3 md:p-5 bg-muted/30 [overflow-wrap:anywhere]"
                     onScroll={handleScroll}
                 >
                     <div className="space-y-2 max-w-3xl mx-auto">
@@ -598,8 +624,8 @@ const Chat = () => {
                         {messages.length === 0 ? (
                             <div className="flex flex-col items-center justify-center h-48 text-muted-foreground text-center animate-in fade-in zoom-in-95 duration-500">
                                 <MessageSquare className="h-12 w-12 mb-3 opacity-20" />
-                                <p>No messages yet.</p>
-                                <p className="text-sm opacity-70">Start the conversation!</p>
+                                <p>{loading ? 'Loading messages…' : loadError ? 'Conversation unavailable' : 'No messages yet.'}</p>
+                                {!loading && !loadError && <p className="text-sm opacity-70">Start the conversation!</p>}
                             </div>
                         ) : (
                             messages.map((msg, i) => {
@@ -726,7 +752,7 @@ const Chat = () => {
                         )}
                         <div ref={scrollRef} />
                     </div>
-                </ScrollArea>
+                </div>
 
                 {/* Scroll to Bottom Button */}
                 {!isAtBottom && (
@@ -746,7 +772,7 @@ const Chat = () => {
                 )}
 
                 {/* Input Area */}
-                <div className="p-2.5 bg-background border-t border-border/50 relative z-10">
+                <div className="shrink-0 p-2 bg-background border-t border-border/50 relative z-10">
                     {showEmojiPicker && (
                         <div className="absolute bottom-20 left-4 z-50 shadow-xl rounded-xl border border-border">
                             <Suspense fallback={<p className="p-4 text-xs">Loading emojis…</p>}><EmojiPicker onEmojiClick={handleEmojiClick} theme={"auto" as never} width={Math.min(320, window.innerWidth - 48)} /></Suspense>
@@ -758,7 +784,7 @@ const Chat = () => {
                             <div className="p-2 bg-muted rounded-md">
                                 {selectedFile.type.startsWith('image/') ? <ImageIcon className="h-4 w-4" /> : <FileText className="h-4 w-4" />}
                             </div>
-                            <div className="max-w-[200px] truncate text-sm">{selectedFile.name}</div>
+                            <div className="max-w-[min(200px,50vw)] truncate text-sm">{selectedFile.name}</div>
                             <Button size="icon" variant="ghost" className="h-6 w-6" onClick={() => setSelectedFile(null)} aria-label="Remove attachment">
                                 <X className="h-3 w-3" />
                             </Button>
@@ -796,11 +822,11 @@ const Chat = () => {
                         </Button>
                         <Input
                             value={newMessage}
-                            onChange={e => setNewMessage(e.target.value)}
+                            onChange={e => { setNewMessage(e.target.value); drafts.current.set(conversationKey, e.target.value); }}
                             id="team-message-input"
                                 placeholder={editingMessage ? "Edit message..." : `Message ${selectedUser ? chatPartner?.name : 'everyone'}...`}
-                            className="flex-1 bg-muted/30 border-muted-foreground/20 focus:bg-background transition-colors rounded-full px-4 py-6"
-                            autoFocus
+                            aria-label="Message"
+                            className="min-w-0 flex-1 bg-muted/30 border-muted-foreground/20 focus:bg-background transition-colors rounded-full px-3 h-11 text-base sm:text-sm"
                         />
                         {editingMessage && (
                             <Button
